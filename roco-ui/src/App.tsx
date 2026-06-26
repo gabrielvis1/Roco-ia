@@ -111,7 +111,7 @@ export default function App() {
   const animationFrameIdRef = useRef<number | null>(null);
 
   // Referencias de Scroll y estados compartidos para evitar cierres obsoletos
-  const chatEndRef = useRef<HTMLDivElement | null>(null);
+  const chatContainerRef = useRef<HTMLDivElement | null>(null);
   const lastProcessedMsgRef = useRef<string>("");
 
   // Referencias para arrastrar el Modal PIP
@@ -583,7 +583,12 @@ export default function App() {
 
   // Auto-scroll del chat integrado
   useEffect(() => {
-    chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (chatContainerRef.current) {
+      chatContainerRef.current.scrollTo({
+        top: chatContainerRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
   }, [chatMessages]);
 
   // Escuchar eventos nativos de Tauri (SysTray)
@@ -1007,7 +1012,7 @@ export default function App() {
           </div>
 
           {/* Chat HUD Integrado con Logs de Red */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-[480px] overflow-hidden">
+          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-[420px] overflow-hidden">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2 mb-3">
               <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                 // CONSOLA COGNITIVA INTEGRADA (CHAT & LOGS)
@@ -1015,7 +1020,7 @@ export default function App() {
             </div>
 
             {/* Ventana de mensajes integrada */}
-            <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 p-1 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg mb-3 min-h-[200px]">
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-3.5 pr-1 p-1 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg mb-3 min-h-[200px]">
               {chatMessages.length === 0 ? (
                 <div className="text-slate-655 italic text-center pt-20 text-xs font-mono">
                   Esperando flujo de eventos o interacción de voz...
@@ -1089,7 +1094,6 @@ export default function App() {
                   );
                 })
               )}
-              <div ref={chatEndRef} />
             </div>
 
             {/* Formulario e inputs de simulación */}
@@ -1231,7 +1235,7 @@ export default function App() {
           </div>
 
           {/* Subgrid: OBS Sources y Mixer Vertical side-by-side */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 h-[280px]">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 h-[240px]">
             {/* A: Capture Sources (7 Columnas) */}
             <div className="md:col-span-7 bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
