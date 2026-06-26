@@ -244,15 +244,63 @@ class WebSocketServer:
             self._logger.error(f"Fallo al abrir cámara {target_id}: {e}")
         return None
 
+    def _create_fallback_frame(self, source_type: str, target_id: str, error_msg: str) -> np.ndarray:
+        """Genera un frame de fallback estético cuando falla la captura de pantalla o cámara."""
+        # Crear una imagen negra de 640x360 (16:9)
+        frame: np.ndarray = np.zeros((360, 640, 3), dtype=np.uint8)
+
+        # Dibujar bordes de color neón (verde gamer)
+        cv2.rectangle(frame, (10, 10), (630, 350), (20, 255, 57), 2)
+
+        # Añadir líneas cruzadas suaves de fondo (estilo HUD)
+        cv2.line(frame, (30, 30), (70, 30), (20, 255, 57), 2)
+        cv2.line(frame, (30, 30), (30, 70), (20, 255, 57), 2)
+        cv2.line(frame, (610, 30), (570, 30), (20, 255, 57), 2)
+        cv2.line(frame, (610, 30), (610, 70), (20, 255, 57), 2)
+
+        # Texto principal
+        cv2.putText(frame, "ROCO IA - LIVE FEED FALLBACK", (50, 80),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (20, 255, 57), 2, cv2.LINE_AA)
+
+        cv2.putText(frame, f"Fuente: {source_type.upper()} ({target_id})", (50, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (240, 240, 240), 1, cv2.LINE_AA)
+
+        # Mensaje explicativo
+        if source_type in ("monitor", "window"):
+            cv2.putText(frame, "Nota: Windows ha bloqueado la captura GDI por falta de", (50, 190),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "permisos interactivos del proceso de fondo (GDI Access Denied).", (50, 215),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Para capturar la pantalla real, inicie el backend manualmente", (50, 255),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "en su propia terminal: 'venv\\Scripts\\python main.py'", (50, 280),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
+        else:
+            cv2.putText(frame, "Nota: No se pudo capturar del dispositivo de video seleccionado.", (50, 190),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Verifique si el puerto/ID es correcto y si la camara esta activa.", (50, 215),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+
+        # Marca de tiempo en vivo
+        ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        cv2.putText(frame, f"TIME: {ts}", (50, 330),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (100, 100, 100), 1, cv2.LINE_AA)
+
+        return frame
+
     def _get_frame(self, source_type: str, target_id: str, cap: Any) -> Optional[np.ndarray]:
         """Obtiene un frame basándose en el tipo de fuente de captura especificado."""
+        frame = None
         if source_type == "camera":
-            return self._capture_camera(cap)
-        if source_type == "monitor":
-            return self._capture_monitor(target_id)
-        if source_type == "window":
-            return self._capture_window(target_id)
-        return None
+            frame = self._capture_camera(cap)
+        elif source_type == "monitor":
+            frame = self._capture_monitor(target_id)
+        elif source_type == "window":
+            frame = self._capture_window(target_id)
+
+        if frame is None:
+            frame = self._create_fallback_frame(source_type, target_id, "Captura fallida")
+        return frame
 
     async def _run_preview(self, websocket: ServerConnection, source_type: str, target_id: str) -> None:
         """Graba y transmite frames comprimidos del monitor, ventana o cámara seleccionada.
@@ -265,8 +313,6 @@ class WebSocketServer:
         cap = None
         if source_type == "camera":
             cap = self._init_camera(target_id)
-            if not cap:
-                return
 
         try:
             while self._preview_active:

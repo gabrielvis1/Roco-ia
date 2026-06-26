@@ -5,6 +5,7 @@ los dispositivos de entrada de audio, cámaras de video USB y pantallas/ventanas
 activas en el sistema operativo.
 """
 
+import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional
@@ -16,8 +17,8 @@ import sounddevice as sd
 from .utils import AsyncLogger
 
 
-def _check_camera(idx: int) -> Optional[Dict[str, Any]]:
-    """Intenta abrir un índice de cámara en un hilo separado para evitar bloqueos."""
+def _check_camera(idx: int) -> Optional[int]:
+    """Intenta abrir un índice de cámara en un hilo separado para verificar si está activo."""
     try:
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
         cap = cv2.VideoCapture(idx, backend)
@@ -26,13 +27,52 @@ def _check_camera(idx: int) -> Optional[Dict[str, Any]]:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
             cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
             cap.release()
-            return {
-                "id": str(idx),
-                "name": f"Dispositivo de Video USB (Puerto {idx})"
-            }
+            return idx
     except Exception:
         pass
     return None
+
+
+def _query_friendly_camera_names() -> List[str]:
+    """Consulta la lista de nombres amigables de cámaras en Windows usando PowerShell."""
+    friendly_names = []
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_PnPEntity | "
+            "Where-Object { $_.Service -eq 'usbvideo' } | "
+            "Select-Object -ExpandProperty Name"
+        ]
+        res = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=3)
+        for line in res.stdout.splitlines():
+            val = line.strip()
+            if val:
+                friendly_names.append(val)
+    except Exception:
+        pass
+    return friendly_names
+
+
+def _map_devices(results: List[Optional[int]], friendly_names: List[str]) -> List[Dict[str, Any]]:
+    """Mapea los índices exitosos de cámaras a sus nombres amigables de forma segura."""
+    devices = []
+    found_idx = 0
+    for res in results:
+        if res is not None:
+            name = f"Cámara USB {res}"
+            if found_idx < len(friendly_names):
+                name = friendly_names[found_idx]
+            elif len(friendly_names) == 1 and res == 2:
+                name = friendly_names[0]
+            elif friendly_names:
+                name = friendly_names[found_idx % len(friendly_names)]
+
+            devices.append({
+                "id": str(res),
+                "name": f"{name} (Puerto {res})"
+            })
+            found_idx += 1
+    return devices
 
 
 class HardwareScanner:
@@ -76,24 +116,34 @@ class HardwareScanner:
 
     @staticmethod
     def get_usb_cameras() -> List[Dict[str, Any]]:
-        """Prueba índices de captura física para detectar cámaras o capturadoras USB activas.
-
-        Usa un ThreadPoolExecutor para no bloquear el hilo de ejecución del servidor.
-
-        Returns:
-            Lista de diccionarios que representan las capturadoras o cámaras USB.
-        """
+        """Obtiene la lista de cámaras o capturadoras USB usando pygrabber en Windows o fallback."""
         usb_devices: List[Dict[str, Any]] = []
-        try:
-            with ThreadPoolExecutor(max_workers=5) as executor:
-                results = executor.map(_check_camera, range(5))
-                for res in results:
-                    if res is not None:
-                        usb_devices.append(res)
-        except Exception as e:
-            AsyncLogger.error(f"Fallo en escaneo con ThreadPoolExecutor de cámaras USB: {e}")
 
-        # Fallback robusto para no retornar lista vacía
+        # Intentar usar pygrabber en Windows
+        if sys.platform == "win32":
+            try:
+                from pygrabber.dshow_graph import FilterGraph
+                devices = FilterGraph().get_input_devices()  # type: ignore
+                for idx, name in enumerate(devices):
+                    name_clean = name.encode("utf-8", errors="ignore").decode("utf-8")
+                    usb_devices.append({
+                        "id": str(idx),
+                        "name": f"{name_clean} (Puerto {idx})"
+                    })
+            except Exception as e:
+                AsyncLogger.warn(f"Fallo al escanear cámaras con pygrabber: {e}")
+
+        # Si no es Windows o pygrabber falló/no retornó dispositivos, usar el método secundario de ThreadPoolExecutor
+        if not usb_devices:
+            friendly_names = _query_friendly_camera_names()
+            try:
+                with ThreadPoolExecutor(max_workers=5) as executor:
+                    results = list(executor.map(_check_camera, range(5)))
+                    usb_devices = _map_devices(results, friendly_names)
+            except Exception as e:
+                AsyncLogger.error(f"Fallo en escaneo secundario de cámaras USB: {e}")
+
+        # Fallback de último recurso
         if not usb_devices:
             usb_devices = [
                 {"id": "0", "name": "Dispositivo de Video USB (Puerto 0) (Mock)"},

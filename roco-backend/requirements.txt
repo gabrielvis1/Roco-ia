@@ -6,3 +6,6 @@ sounddevice>=0.4.6
 opencv-python-headless>=4.8.0.0
 mss>=9.0.0
 pygetwindow>=0.0.9
+pygrabber>=0.2
+comtypes>=1.4.16
+
