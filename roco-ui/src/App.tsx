@@ -868,7 +868,7 @@ export default function App() {
   }, [isDraggingPip]);
 
   return (
-    <div className="flex flex-col h-screen bg-gamer-dark p-4 md:p-5 text-slate-300 font-sans select-none relative overflow-hidden">
+    <div className="flex flex-col min-h-screen bg-gamer-dark p-4 md:p-5 text-slate-300 font-sans select-none relative overflow-y-auto">
       {/* Notificación Flotante */}
       {toast && (
         <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-50 bg-gamer-panel border border-gamer-neonGreen text-gamer-neonGreen px-4 py-2.5 rounded-lg shadow-[0_0_20px_rgba(57,255,20,0.25)] flex items-center gap-3 animate-pulse">
@@ -938,9 +938,9 @@ export default function App() {
       </header>
 
       {/* Grid Principal */}
-      <main className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-5 overflow-hidden">
+      <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-5 pb-8">
         {/* COLUMNA IZQUIERDA: Configuración y Chat HUD Integrado */}
-        <section className="lg:col-span-5 flex flex-col gap-4 overflow-hidden">
+        <section className="lg:col-span-5 flex flex-col gap-4">
           {/* Tarjeta de Perfil e Idioma de Salida */}
           <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
@@ -1007,7 +1007,7 @@ export default function App() {
           </div>
 
           {/* Chat HUD Integrado con Logs de Red */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col flex-1 overflow-hidden">
+          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-[480px] overflow-hidden">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2 mb-3">
               <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                 // CONSOLA COGNITIVA INTEGRADA (CHAT & LOGS)
@@ -1140,7 +1140,7 @@ export default function App() {
         </section>
 
         {/* COLUMNA DERECHA: Preview de Video, Fuentes OBS y Mixer Vertical */}
-        <section className="lg:col-span-7 flex flex-col gap-4 overflow-hidden">
+        <section className="lg:col-span-7 flex flex-col gap-4">
           {/* 1. Live Preview Screen */}
           <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-2">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-1.5">
@@ -1231,7 +1231,7 @@ export default function App() {
           </div>
 
           {/* Subgrid: OBS Sources y Mixer Vertical side-by-side */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 flex-1 min-h-[240px] overflow-hidden">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 h-[280px]">
             {/* A: Capture Sources (7 Columnas) */}
             <div className="md:col-span-7 bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
@@ -1368,7 +1368,7 @@ export default function App() {
 
       {/* --- MODAL 1: REGISTRAR JUEGO --- */}
       {showAddProfileModal && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
           <div className="bg-gamer-panel border border-gamer-border rounded-xl max-w-sm w-full p-5 shadow-2xl relative">
             <button
               onClick={() => setShowAddProfileModal(false)}
@@ -1432,7 +1432,7 @@ export default function App() {
 
       {/* --- MODAL DE GESTIÓN API KEYS --- */}
       {showApiModal && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
           <div className="bg-gamer-panel border border-gamer-border rounded-xl max-w-lg w-full p-5 shadow-2xl relative flex flex-col max-h-[90vh]">
             <button
               onClick={() => setShowApiModal(false)}
@@ -1531,7 +1531,7 @@ export default function App() {
 
       {/* --- MODAL DEDICADO DE CONFIGURACIÓN DE MICRÓFONO --- */}
       {showMicModal && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
           <div className="bg-gamer-panel border border-gamer-border rounded-xl max-w-sm w-full p-5 shadow-2xl relative">
             <button
               onClick={() => setShowMicModal(false)}
@@ -1611,7 +1611,7 @@ export default function App() {
       {/* --- SECUENCIA MODALES FUENTES CAPTURA (OBS) --- */}
       {/* MODAL FUENTE 1: Nombre */}
       {showAddSourceModal1 && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
           <div className="bg-gamer-panel border border-gamer-border rounded-xl max-w-sm w-full p-5 shadow-2xl relative">
             <button
               onClick={() => setShowAddSourceModal1(false)}
@@ -1673,7 +1673,7 @@ export default function App() {
 
       {/* MODAL FUENTE 2: Configuración del Dispositivo (Hardware real de Python) */}
       {showAddSourceModal2 && (
-        <div className="absolute inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
+        <div className="fixed inset-0 bg-black/85 backdrop-blur-md z-50 flex items-center justify-center p-6 animate-[fadeIn_0.15s_ease-out]">
           <div className="bg-gamer-panel border border-gamer-border rounded-xl max-w-md w-full p-5 shadow-2xl relative">
             <button
               onClick={() => setShowAddSourceModal2(false)}
