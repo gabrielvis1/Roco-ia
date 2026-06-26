@@ -115,6 +115,8 @@ class DatabaseManager:
                 ("microphone_gain", "80"),
                 ("input_language", "es"),
                 ("volume", "80"),
+                ("preview_width", "480"),
+                ("preview_jpeg_quality", "50"),
             ]
             cursor.executemany(
                 "INSERT OR IGNORE INTO general_settings (key, value) VALUES (?, ?)",

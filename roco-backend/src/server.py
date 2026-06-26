@@ -53,6 +53,12 @@ class WebSocketServer:
         # Gestión del micrófono en segundo plano
         self._mic_stream: Optional[sd.InputStream] = None
 
+        # Configuración de previsualización en caliente
+        preview_width_str = self._db.get_setting("preview_width", "480") or "480"
+        self._preview_width: int = int(preview_width_str)
+        preview_quality_str = self._db.get_setting("preview_jpeg_quality", "50") or "50"
+        self._preview_jpeg_quality: int = int(preview_quality_str)
+
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
 
@@ -104,6 +110,8 @@ class WebSocketServer:
                 "input_language": self._db.get_setting("input_language", "es"),
                 "volume": self._db.get_setting("volume", "80"),
                 "active_mic": self._db.get_setting("microphone_device_id", "default"),
+                "preview_width": self._db.get_setting("preview_width", "480"),
+                "preview_jpeg_quality": self._db.get_setting("preview_jpeg_quality", "50"),
             }
             profiles = self._db.get_game_profiles()
             api_keys = self._db.list_api_keys()
@@ -218,11 +226,14 @@ class WebSocketServer:
             frame: Imagen cruda capturada en formato numpy.
         """
         h, w = frame.shape[:2]
-        if w > 480:
-            ratio = 480.0 / w
-            frame = cv2.resize(frame, (480, int(h * ratio)))
+        target_width = getattr(self, "_preview_width", 480)
+        jpeg_quality = getattr(self, "_preview_jpeg_quality", 50)
 
-        success, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+        if w > target_width:
+            ratio = float(target_width) / w
+            frame = cv2.resize(frame, (target_width, int(h * ratio)))
+
+        success, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), jpeg_quality])
         if success:
             jpg_text = base64.b64encode(buffer).decode("utf-8")
             await self._send_json(websocket, {
@@ -362,26 +373,40 @@ class WebSocketServer:
                 }
             })
 
+    def _sync_db_settings(self, key: str, value: Any) -> None:
+        """Sincroniza configuraciones cruzadas en la base de datos sqlite."""
+        if key == "active_mic":
+            self._db.save_setting("microphone_device_id", str(value))
+        elif key == "microphone_device_id":
+            self._db.save_setting("active_mic", str(value))
+        elif key == "volume":
+            self._db.save_setting("microphone_gain", str(value))
+        elif key == "microphone_gain":
+            self._db.save_setting("volume", str(value))
+
+    def _update_preview_and_audio_cache(self, key: str, value: Any) -> None:
+        """Actualiza la escucha de audio y la caché de previsualización en caliente."""
+        if key in ("microphone_active", "microphone_device_id", "active_mic"):
+            self._start_mic_listener()
+        elif key == "preview_width":
+            try:
+                self._preview_width = int(value)
+            except ValueError:
+                pass
+        elif key == "preview_jpeg_quality":
+            try:
+                self._preview_jpeg_quality = int(value)
+            except ValueError:
+                pass
+
     async def _handle_save_setting(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
         """Guarda una configuración de la aplicación."""
         key = payload.get("key")
         value = payload.get("value")
         if key and value is not None:
             self._db.save_setting(key, str(value))
-
-            # Sincronizar active_mic y microphone_device_id
-            if key == "active_mic":
-                self._db.save_setting("microphone_device_id", str(value))
-            elif key == "microphone_device_id":
-                self._db.save_setting("active_mic", str(value))
-            elif key == "volume":
-                self._db.save_setting("microphone_gain", str(value))
-            elif key == "microphone_gain":
-                self._db.save_setting("volume", str(value))
-
-            # Si cambia estado de micro, actualizar en caliente
-            if key in ("microphone_active", "microphone_device_id", "active_mic"):
-                self._start_mic_listener()
+            self._sync_db_settings(key, value)
+            self._update_preview_and_audio_cache(key, value)
 
             await self._send_json(websocket, {
                 "event": "SAVE_SETTING_ACK",

@@ -84,6 +84,8 @@ export default function App() {
   // Active Preview Source (transmisión por websockets)
   const [activePreviewSource, setActivePreviewSource] = useState<CaptureSource | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
+  const [previewWidth, setPreviewWidth] = useState<number>(480);
+  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(50);
 
   // Lista de Chat y Logs Integrada
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -416,6 +418,13 @@ export default function App() {
             setActiveGameId(settings.active_game_profile);
           }
 
+          if (settings.preview_width) {
+            setPreviewWidth(Number(settings.preview_width));
+          }
+          if (settings.preview_jpeg_quality) {
+            setPreviewJpegQuality(Number(settings.preview_jpeg_quality));
+          }
+
           // Restaurar active_capture_source y previsualización
           const activeSrcName = settings.active_capture_source;
           if (activeSrcName && payload.sources) {
@@ -475,6 +484,10 @@ export default function App() {
               payload.value === true ||
               payload.value === "true"
           );
+        } else if (payload.key === "preview_width") {
+          setPreviewWidth(Number(payload.value));
+        } else if (payload.key === "preview_jpeg_quality") {
+          setPreviewJpegQuality(Number(payload.value));
         }
         addSystemChat(`Configuración guardada en base de datos: [${payload.key} = ${payload.value}]`, "success", payload);
         break;
@@ -728,6 +741,16 @@ export default function App() {
     setPreviewImageSrc(null);
     sendMessage("STOP_PREVIEW", {});
     sendMessage("SAVE_SETTING", { key: "active_capture_source", value: "" });
+  };
+
+  const handlePreviewWidthChange = (width: number) => {
+    setPreviewWidth(width);
+    sendMessage("SAVE_SETTING", { key: "preview_width", value: width });
+  };
+
+  const handlePreviewJpegQualityChange = (quality: number) => {
+    setPreviewJpegQuality(quality);
+    sendMessage("SAVE_SETTING", { key: "preview_jpeg_quality", value: quality });
   };
 
   const handleBackToModal1 = () => {
@@ -1158,6 +1181,52 @@ export default function App() {
                   </div>
                 </>
               )}
+            </div>
+
+            {/* Controles de Calidad y Resolución en Vivo */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1.5 border-t border-gamer-border/40 mt-1">
+              {/* Resolución */}
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">
+                  Resolución:
+                </span>
+                <div className="flex bg-gamer-dark border border-gamer-border rounded p-0.5 overflow-hidden">
+                  {[480, 720, 1080].map((w) => (
+                    <button
+                      key={w}
+                      type="button"
+                      onClick={() => handlePreviewWidthChange(w)}
+                      className={`px-2.5 py-0.5 rounded text-[10px] font-mono font-bold transition-all cursor-pointer ${
+                        previewWidth === w
+                          ? "bg-gamer-neonGreen text-black"
+                          : "text-slate-500 hover:text-slate-350"
+                      }`}
+                    >
+                      {w === 480 ? "480p" : w === 720 ? "720p" : "1080p"}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Compresión JPEG */}
+              <div className="flex items-center gap-3">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">
+                    Nitidez (Calidad):
+                  </span>
+                  <span className="text-[10px] font-mono text-gamer-neonGreen font-bold">
+                    {previewJpegQuality}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="30"
+                  max="95"
+                  value={previewJpegQuality}
+                  onChange={(e) => handlePreviewJpegQualityChange(Number(e.target.value))}
+                  className="w-24 accent-gamer-neonGreen bg-gamer-dark border border-gamer-border rounded h-1 cursor-pointer"
+                />
+              </div>
             </div>
           </div>
 
