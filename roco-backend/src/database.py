@@ -80,10 +80,22 @@ class DatabaseManager:
                 """
             )
 
+            # Tabla 4: capture_sources
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS capture_sources (
+                    name TEXT PRIMARY KEY,
+                    type TEXT NOT NULL,
+                    target_id TEXT NOT NULL
+                )
+                """
+            )
+
             # Insertar perfiles por defecto si la tabla está vacía
             cursor.execute("SELECT COUNT(*) FROM game_profiles")
             if cursor.fetchone()[0] == 0:
                 default_profiles = [
+                    ("default", "Default Profile"),
                     ("zelda_totk", "Zelda: Tears of the Kingdom"),
                     ("elden_ring", "Elden Ring"),
                     ("valorant", "Valorant"),
@@ -93,18 +105,21 @@ class DatabaseManager:
                     default_profiles,
                 )
 
-            # Insertar configuraciones globales por defecto
-            cursor.execute("SELECT COUNT(*) FROM general_settings")
-            if cursor.fetchone()[0] == 0:
-                default_settings = [
-                    ("input_language", "es"),
-                    ("output_language", "es"),
-                    ("volume", "80"),
-                ]
-                cursor.executemany(
-                    "INSERT INTO general_settings (key, value) VALUES (?, ?)",
-                    default_settings,
-                )
+            # Insertar configuraciones globales por defecto si no existen
+            default_settings = [
+                ("active_game_profile", "default"),
+                ("output_language", "es"),
+                ("active_capture_source", ""),
+                ("microphone_device_id", "default"),
+                ("microphone_active", "1"),
+                ("microphone_gain", "80"),
+                ("input_language", "es"),
+                ("volume", "80"),
+            ]
+            cursor.executemany(
+                "INSERT OR IGNORE INTO general_settings (key, value) VALUES (?, ?)",
+                default_settings,
+            )
 
             conn.commit()
         except sqlite3.Error as e:
@@ -292,5 +307,64 @@ class DatabaseManager:
         except sqlite3.Error as e:
             conn.rollback()
             raise RuntimeError(f"Error al registrar/actualizar perfil '{profile_id}': {e}")
+        finally:
+            conn.close()
+
+    # --- Helpers para la tabla capture_sources ---
+
+    def save_capture_source(self, name: str, type_str: str, target_id: str) -> None:
+        """Guarda o actualiza una fuente de captura en la base de datos.
+
+        Args:
+            name: Nombre personalizado de la fuente.
+            type_str: Tipo de fuente ('monitor', 'window', 'camera').
+            target_id: Identificador físico/lógico del objetivo.
+        """
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                INSERT INTO capture_sources (name, type, target_id)
+                VALUES (?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET type=excluded.type, target_id=excluded.target_id
+                """,
+                (name, type_str, target_id),
+            )
+            conn.commit()
+        except sqlite3.Error as e:
+            conn.rollback()
+            raise RuntimeError(f"Error al guardar fuente de captura '{name}': {e}")
+        finally:
+            conn.close()
+
+    def get_capture_sources(self) -> List[Dict[str, Any]]:
+        """Obtiene todas las fuentes de captura configuradas en SQLite.
+
+        Returns:
+            Lista de diccionarios representando las fuentes.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute("SELECT name, type, target_id FROM capture_sources")
+            rows = cursor.fetchall()
+            return [dict(row) for row in rows]
+        except sqlite3.Error as e:
+            raise RuntimeError(f"Error al obtener fuentes de captura: {e}")
+        finally:
+            conn.close()
+
+    def delete_capture_source(self, name: str) -> None:
+        """Elimina una fuente de captura de la base de datos.
+
+        Args:
+            name: Nombre de la fuente a eliminar.
+        """
+        conn = self._get_connection()
+        try:
+            conn.execute("DELETE FROM capture_sources WHERE name = ?", (name,))
+            conn.commit()
+        except sqlite3.Error as e:
+            conn.rollback()
+            raise RuntimeError(f"Error al eliminar fuente de captura '{name}': {e}")
         finally:
             conn.close()

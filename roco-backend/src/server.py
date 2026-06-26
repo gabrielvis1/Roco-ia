@@ -1,18 +1,27 @@
 """Módulo del servidor WebSocket para Roco.
 
 Contiene la lógica de comunicación bidireccional asíncrona orientada a objetos
-con el panel de control (frontend) de la aplicación, interactuando con la base de datos SQLite.
+con el panel de control (frontend) de la aplicación, interactuando con la base de datos SQLite
+y controlando la captura de periféricos de hardware en tiempo real.
 """
 
+import asyncio
+import base64
 import json
 import sys
 from datetime import datetime
-from typing import Any, Dict, Optional, Set
+from typing import Any, Dict, Optional, Set, cast
+import cv2
+import mss
+import numpy as np
+import pygetwindow as gw
+import sounddevice as sd
 from websockets.asyncio.server import Server, serve, ServerConnection
 from websockets.exceptions import ConnectionClosedError, ConnectionClosedOK
 
 from .config import SystemConfig
 from .database import DatabaseManager
+from .hardware import HardwareScanner
 from .utils import AsyncLogger
 
 
@@ -20,7 +29,7 @@ class WebSocketServer:
     """Servidor de WebSockets asíncrono para gestionar la interfaz del panel de Roco.
 
     Encapsula el ciclo de vida, escuchando eventos del cliente, interactuando
-    con la base de datos local y permitiendo el envío masivo de estados.
+    con la base de datos local y transmitiendo capturas de pantalla/video en vivo.
     """
 
     def __init__(self, config: SystemConfig, logger: AsyncLogger, db: DatabaseManager) -> None:
@@ -36,6 +45,13 @@ class WebSocketServer:
         self._db: DatabaseManager = db
         self._server: Optional[Server] = None
         self._connected_clients: Set[ServerConnection] = set()
+
+        # Gestión del bucle de captura de video en vivo
+        self._preview_task: Optional[asyncio.Task[None]] = None
+        self._preview_active: bool = False
+
+        # Gestión del micrófono en segundo plano
+        self._mic_stream: Optional[sd.InputStream] = None
 
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
@@ -79,12 +95,20 @@ class WebSocketServer:
         try:
             # Obtener datos guardados de la base de datos
             settings = {
-                "input_language": self._db.get_setting("input_language", "es"),
+                "active_game_profile": self._db.get_setting("active_game_profile", "default"),
                 "output_language": self._db.get_setting("output_language", "es"),
+                "active_capture_source": self._db.get_setting("active_capture_source", ""),
+                "microphone_device_id": self._db.get_setting("microphone_device_id", "default"),
+                "microphone_active": self._db.get_setting("microphone_active", "1"),
+                "microphone_gain": self._db.get_setting("microphone_gain", "80"),
+                "input_language": self._db.get_setting("input_language", "es"),
                 "volume": self._db.get_setting("volume", "80"),
+                "active_mic": self._db.get_setting("microphone_device_id", "default"),
             }
             profiles = self._db.get_game_profiles()
             api_keys = self._db.list_api_keys()
+            sources = self._db.get_capture_sources()
+            audio_devices = HardwareScanner.get_audio_devices()
 
             handshake_payload: Dict[str, Any] = {
                 "event": "SYSTEM_STATUS",
@@ -100,11 +124,164 @@ class WebSocketServer:
                     "settings": settings,
                     "profiles": profiles,
                     "api_keys": api_keys,
+                    "sources": sources,
+                    "audio_devices": audio_devices,
                 },
             }
             await self._send_json(websocket, handshake_payload)
         except Exception as e:
             self._logger.error(f"Error al armar o enviar el handshake inicial: {e}")
+
+    async def _stop_preview_task(self) -> None:
+        """Detiene de forma segura la tarea en segundo plano de captura de frames."""
+        self._preview_active = False
+        if self._preview_task is not None:
+            self._preview_task.cancel()
+            try:
+                await self._preview_task
+            except asyncio.CancelledError:
+                pass
+            self._preview_task = None
+
+    def _capture_camera(self, cap: Any) -> Optional[np.ndarray]:
+        """Captura un frame de video de la cámara activa.
+
+        Args:
+            cap: Objeto de captura de OpenCV.
+
+        Returns:
+            Frame de imagen capturado en formato numpy o None.
+        """
+        if cap:
+            ret, raw_frame = cap.read()
+            if ret:
+                return cast(np.ndarray, raw_frame)
+        return None
+
+    def _capture_monitor(self, target_id: str) -> Optional[np.ndarray]:
+        """Captura de pantalla del monitor seleccionado por su índice.
+
+        Args:
+            target_id: Índice del monitor.
+
+        Returns:
+            Frame capturado o None.
+        """
+        try:
+            idx = int(target_id)
+            with mss.mss() as sct:
+                if idx < len(sct.monitors):
+                    mon = sct.monitors[idx]
+                    img = sct.grab(mon)
+                    raw_frame = np.array(img)
+                    return cast(np.ndarray, cv2.cvtColor(raw_frame, cv2.COLOR_BGRA2BGR))
+        except Exception as e:
+            self._logger.error(f"Error capturando monitor {target_id}: {e}")
+        return None
+
+    def _capture_window(self, target_id: str) -> Optional[np.ndarray]:
+        """Captura de pantalla de la ventana seleccionada del SO.
+
+        Args:
+            target_id: Título o índice de la ventana.
+
+        Returns:
+            Frame capturado o None.
+        """
+        try:
+            win = None
+            all_wins = gw.getAllWindows()
+            try:
+                win = all_wins[int(target_id)]
+            except ValueError:
+                for w in all_wins:
+                    if w.title == target_id:
+                        win = w
+                        break
+            if win:
+                l, t, w_width, w_height = win.left, win.top, win.width, win.height
+                if w_width > 0 and w_height > 0:
+                    bbox = {"left": l, "top": t, "width": w_width, "height": w_height}
+                    with mss.mss() as sct:
+                        img = sct.grab(bbox)
+                        raw_frame = np.array(img)
+                        return cast(np.ndarray, cv2.cvtColor(raw_frame, cv2.COLOR_BGRA2BGR))
+        except Exception as e:
+            self._logger.error(f"Error capturando ventana {target_id}: {e}")
+        return None
+
+    async def _process_and_send_frame(self, websocket: ServerConnection, frame: np.ndarray) -> None:
+        """Optimiza, comprime y transmite un frame individual al cliente de forma asíncrona.
+
+        Args:
+            websocket: Conexión de websocket de destino.
+            frame: Imagen cruda capturada en formato numpy.
+        """
+        h, w = frame.shape[:2]
+        if w > 480:
+            ratio = 480.0 / w
+            frame = cv2.resize(frame, (480, int(h * ratio)))
+
+        success, buffer = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
+        if success:
+            jpg_text = base64.b64encode(buffer).decode("utf-8")
+            await self._send_json(websocket, {
+                "event": "PREVIEW_FRAME",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "image": f"data:image/jpeg;base64,{jpg_text}"
+                }
+            })
+
+    def _init_camera(self, target_id: str) -> Optional[cv2.VideoCapture]:
+        """Inicializa el objeto de captura de video de OpenCV de manera segura."""
+        try:
+            backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+            cap = cv2.VideoCapture(int(target_id), backend)
+            if cap.isOpened():
+                return cap
+        except Exception as e:
+            self._logger.error(f"Fallo al abrir cámara {target_id}: {e}")
+        return None
+
+    def _get_frame(self, source_type: str, target_id: str, cap: Any) -> Optional[np.ndarray]:
+        """Obtiene un frame basándose en el tipo de fuente de captura especificado."""
+        if source_type == "camera":
+            return self._capture_camera(cap)
+        if source_type == "monitor":
+            return self._capture_monitor(target_id)
+        if source_type == "window":
+            return self._capture_window(target_id)
+        return None
+
+    async def _run_preview(self, websocket: ServerConnection, source_type: str, target_id: str) -> None:
+        """Graba y transmite frames comprimidos del monitor, ventana o cámara seleccionada.
+
+        Args:
+            websocket: Conexión de websocket de destino.
+            source_type: Tipo de fuente ('monitor', 'window', 'camera').
+            target_id: Identificador físico o lógico del objetivo.
+        """
+        cap = None
+        if source_type == "camera":
+            cap = self._init_camera(target_id)
+            if not cap:
+                return
+
+        try:
+            while self._preview_active:
+                frame = self._get_frame(source_type, target_id, cap)
+                if frame is not None:
+                    await self._process_and_send_frame(websocket, frame)
+                await asyncio.sleep(0.1)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if cap:
+                cap.release()
+            self._logger.info("Ciclo de captura de previsualización cerrado limpiamente.")
+
+    # --- Controladores de Eventos ---
 
     async def _handle_create_profile(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
         """Procesa el evento de registro de un nuevo juego en game_profiles."""
@@ -145,6 +322,21 @@ class WebSocketServer:
         value = payload.get("value")
         if key and value is not None:
             self._db.save_setting(key, str(value))
+
+            # Sincronizar active_mic y microphone_device_id
+            if key == "active_mic":
+                self._db.save_setting("microphone_device_id", str(value))
+            elif key == "microphone_device_id":
+                self._db.save_setting("active_mic", str(value))
+            elif key == "volume":
+                self._db.save_setting("microphone_gain", str(value))
+            elif key == "microphone_gain":
+                self._db.save_setting("volume", str(value))
+
+            # Si cambia estado de micro, actualizar en caliente
+            if key in ("microphone_active", "microphone_device_id", "active_mic"):
+                self._start_mic_listener()
+
             await self._send_json(websocket, {
                 "event": "SAVE_SETTING_ACK",
                 "timestamp": datetime.now().isoformat(),
@@ -205,6 +397,91 @@ class WebSocketServer:
                 }
             })
 
+    async def _handle_start_preview(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Inicia el bucle asíncrono de previsualización de video en vivo."""
+        source_type = payload.get("type")
+        target_id = payload.get("target_id")
+        if not source_type or target_id is None:
+            return
+
+        await self._stop_preview_task()
+
+        self._preview_active = True
+        self._preview_task = asyncio.create_task(
+            self._run_preview(websocket, source_type, str(target_id))
+        )
+        self._logger.info(f"Previsualización de video iniciada para: {source_type} ({target_id})")
+
+        await self._send_json(websocket, {
+            "event": "START_PREVIEW_ACK",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {
+                "status": "success"
+            }
+        })
+
+    async def _handle_stop_preview(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Detiene la tarea en segundo plano de previsualización."""
+        await self._stop_preview_task()
+        await self._send_json(websocket, {
+            "event": "STOP_PREVIEW_ACK",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {
+                "status": "success"
+            }
+        })
+
+    async def _handle_get_hardware_sources(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Devuelve la lista actual de monitores, cámaras USB y ventanas activas del SO."""
+        usb_devices = HardwareScanner.get_usb_cameras()
+        monitors = HardwareScanner.get_monitors()
+        windows = HardwareScanner.get_active_windows()
+
+        await self._send_json(websocket, {
+            "event": "GET_HARDWARE_SOURCES_ACK",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {
+                "status": "success",
+                "received_payload": {
+                    "monitors": monitors,
+                    "windows": windows,
+                    "usb_devices": usb_devices
+                }
+            }
+        })
+
+    async def _handle_save_capture_source(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Guarda una nueva fuente en SQLite y devuelve la lista actualizada."""
+        name = payload.get("name")
+        source_type = payload.get("type")
+        target_id = payload.get("target_id")
+        if name and source_type and target_id is not None:
+            self._db.save_capture_source(name, source_type, str(target_id))
+            sources = self._db.get_capture_sources()
+            await self._send_json(websocket, {
+                "event": "SAVE_CAPTURE_SOURCE_ACK",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "status": "success",
+                    "sources": sources
+                }
+            })
+
+    async def _handle_delete_capture_source(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Elimina una fuente existente y actualiza la lista del cliente."""
+        name = payload.get("name")
+        if name:
+            self._db.delete_capture_source(name)
+            sources = self._db.get_capture_sources()
+            await self._send_json(websocket, {
+                "event": "DELETE_CAPTURE_SOURCE_ACK",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "status": "success",
+                    "sources": sources
+                }
+            })
+
     async def _process_message(self, websocket: ServerConnection, message_str: str) -> None:
         """Deserializa y procesa un mensaje entrante, enrutando el evento al controlador apropiado.
 
@@ -240,6 +517,11 @@ class WebSocketServer:
                 "SAVE_API_KEY": self._handle_save_api_key,
                 "DEACTIVATE_API_KEY": self._handle_deactivate_api_key,
                 "TEST_API_KEY": self._handle_test_api_key,
+                "START_PREVIEW": self._handle_start_preview,
+                "STOP_PREVIEW": self._handle_stop_preview,
+                "GET_HARDWARE_SOURCES": self._handle_get_hardware_sources,
+                "SAVE_CAPTURE_SOURCE": self._handle_save_capture_source,
+                "DELETE_CAPTURE_SOURCE": self._handle_delete_capture_source,
             }
 
             if event in handlers:
@@ -294,8 +576,80 @@ class WebSocketServer:
         except Exception as e:
             self._logger.error(f"Error en comunicación con {client_address}: {e}")
         finally:
+            await self._stop_preview_task()
             self._connected_clients.remove(websocket)
             self._logger.info(f"Cliente desconectado: {client_address}")
+
+    def _resolve_mic_device(self, device_id: str) -> Optional[int]:
+        """Resuelve el ID de dispositivo de micrófono en un índice válido para sounddevice."""
+        if not device_id or device_id == "default":
+            try:
+                default_dev = sd.default.device[0]
+                return int(default_dev) if default_dev >= 0 else None
+            except Exception:
+                return None
+        try:
+            return int(device_id)
+        except ValueError:
+            return self._find_mic_by_name(device_id)
+
+    def _find_mic_by_name(self, name: str) -> Optional[int]:
+        """Busca un micrófono por nombre y devuelve su índice."""
+        try:
+            devices = sd.query_devices()
+            for idx, dev in enumerate(devices):
+                if isinstance(dev, dict) and dev.get("max_input_channels", 0) > 0:
+                    dev_name = dev.get("name", "")
+                    if name.lower() in dev_name.lower():
+                        return idx
+        except Exception:
+            pass
+        return None
+
+    def _start_mic_listener(self) -> None:
+        """Inicia la escucha del micrófono usando sounddevice de forma asíncrona si está activo."""
+        try:
+            self._stop_mic_listener()
+
+            mic_active = self._db.get_setting("microphone_active", "1")
+            if mic_active not in ("1", "true", "True", True):
+                self._logger.info("El micrófono está guardado como inactivo (silenciado) en SQLite.")
+                return
+
+            device_id_str = str(self._db.get_setting("microphone_device_id", "default") or "default")
+            device_idx = self._resolve_mic_device(device_id_str)
+
+            self._logger.info(
+                f"Iniciando flujo de escucha de audio "
+                f"(ID guardado: '{device_id_str}', índice: {device_idx})..."
+            )
+
+            def callback(indata: Any, frames: Any, time: Any, status: Any) -> None:
+                pass
+
+            self._mic_stream = sd.InputStream(
+                device=device_idx,
+                channels=1,
+                callback=callback,
+                samplerate=16000
+            )
+            self._mic_stream.start()
+            self._logger.success("Flujo de entrada de audio (micrófono) activo en segundo plano.")
+        except Exception as e:
+            self._logger.error(f"Error al iniciar flujo de audio en backend: {e}")
+            self._mic_stream = None
+
+    def _stop_mic_listener(self) -> None:
+        """Detiene la captura de audio en segundo plano si está activa."""
+        if hasattr(self, "_mic_stream") and self._mic_stream is not None:
+            try:
+                self._mic_stream.stop()
+                self._mic_stream.close()
+                self._logger.info("Flujo de entrada de audio (micrófono) liberado.")
+            except Exception as e:
+                self._logger.error(f"Error liberando flujo de audio: {e}")
+            finally:
+                self._mic_stream = None
 
     async def start(self) -> None:
         """Arranca el servidor de WebSockets de forma asíncrona."""
@@ -305,6 +659,9 @@ class WebSocketServer:
 
         self._logger.info(f"Iniciando servidor WebSocket en ws://{self._config.host}:{self._config.port}...")
         try:
+            # Inicializar estado de hardware (micrófono) en caliente desde SQLite
+            self._start_mic_listener()
+
             self._server = await serve(
                 self._handler,
                 self._config.host,
@@ -322,6 +679,8 @@ class WebSocketServer:
             return
 
         self._logger.info("Deteniendo servidor WebSocket...")
+        await self._stop_preview_task()
+        self._stop_mic_listener()
 
         # Clonamos la lista de clientes para iterar de manera segura
         clients_to_close = list(self._connected_clients)

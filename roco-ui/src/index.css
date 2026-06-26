@@ -18,3 +18,17 @@
 ::-webkit-scrollbar-thumb {
   @apply bg-gamer-border rounded-full;
 }
+
+@utility animate-scan {
+  animation: scan 6s linear infinite;
+}
+
+@keyframes scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
