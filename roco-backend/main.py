@@ -1,12 +1,13 @@
 """Script de entrada principal y orquestador asíncrono del servicio Roco.
 
-Carga la configuración global, inicializa el servidor WebSocket
+Carga la configuración global, inicializa la base de datos y el servidor WebSocket,
 y maneja el ciclo de vida de la ejecución asíncrona.
 """
 
 import asyncio
 import sys
 from src.config import SystemConfig
+from src.database import DatabaseManager
 from src.server import WebSocketServer
 from src.utils import AsyncLogger
 
@@ -18,7 +19,9 @@ async def main(logger: AsyncLogger) -> None:
         logger: Instancia de AsyncLogger para registro de eventos.
     """
     config = SystemConfig()
-    server = WebSocketServer(config, logger)
+    # Inicializar el administrador de base de datos SQLite
+    db = DatabaseManager()
+    server = WebSocketServer(config, logger, db)
 
     await server.start()
 

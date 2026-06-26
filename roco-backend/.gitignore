@@ -37,3 +37,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Bases de datos y logs locales
+*.db
+*.log

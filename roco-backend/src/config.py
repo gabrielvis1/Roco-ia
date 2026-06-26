@@ -16,5 +16,5 @@ class SystemConfig:
     """
 
     host: str = "localhost"
-    port: int = 8765
+    port: int = 8000
     base_dir: Path = Path(__file__).resolve().parent.parent

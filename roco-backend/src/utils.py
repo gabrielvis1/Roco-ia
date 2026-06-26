@@ -1,49 +1,57 @@
 """Módulo de utilidades de registro de eventos (logging) para Roco.
 
 Proporciona un formateador estético y asíncronamente seguro con colores
-para la consola del sistema.
+para la consola del sistema y almacenamiento en archivo utilizando la librería Loguru.
 """
 
-from datetime import datetime
-from typing import Final
+import sys
+from loguru import logger
+
+# Configurar Loguru: remover el handler por defecto e inicializar los nuestros
+logger.remove()
+
+# Handler para la consola con colores gamer
+logger.add(
+    sys.stdout,
+    format="<light-black>[{time:HH:mm:ss}]</light-black> | <level>{level: <7}</level> | <level>{message}</level>",
+    level="INFO",
+    colorize=True,
+)
+
+# Handler para almacenar los logs en archivo físico
+logger.add(
+    "roco_backend.log",
+    rotation="10 MB",
+    retention="1 week",
+    format="{time:YYYY-MM-DD HH:mm:ss} | {level: <7} | {message}",
+    level="DEBUG",
+    encoding="utf-8",
+)
 
 
 class AsyncLogger:
-    """Registrador de logs personalizado con soporte para códigos de color ANSI.
+    """Registrador de logs personalizado.
 
-    Formatea la salida en consola simulando una terminal oscura de estilo gamer.
+    Formatea y redirige las llamadas hacia la librería Loguru para
+    salida en terminal y persistencia en archivo.
     """
-
-    # Códigos ANSI para colores en consola
-    COLOR_RESET: Final[str] = "\033[0m"
-    COLOR_TIME: Final[str] = "\033[90m"      # Gris
-    COLOR_SUCCESS: Final[str] = "\033[38;5;82m"  # Verde Neón
-    COLOR_INFO: Final[str] = "\033[36m"         # Cian/Azul
-    COLOR_WARN: Final[str] = "\033[33m"         # Amarillo
-    COLOR_ERROR: Final[str] = "\033[31m"        # Rojo
-
-    @classmethod
-    def _get_timestamp(cls) -> str:
-        """Obtiene la marca de tiempo actual formateada."""
-        now: datetime = datetime.now()
-        return f"{cls.COLOR_TIME}[{now.strftime('%H:%M:%S')}]{cls.COLOR_RESET}"
 
     @classmethod
     def success(cls, message: str) -> None:
-        """Registra un mensaje de éxito/handshake en verde neón."""
-        print(f"{cls._get_timestamp()} {cls.COLOR_SUCCESS}[ÉXITO] {message}{cls.COLOR_RESET}")
+        """Registra un mensaje de éxito/handshake exitoso."""
+        logger.success(message)
 
     @classmethod
     def info(cls, message: str) -> None:
-        """Registra un mensaje informativo del sistema en cian."""
-        print(f"{cls._get_timestamp()} {cls.COLOR_INFO}[INFO] {message}{cls.COLOR_RESET}")
+        """Registra un mensaje informativo del sistema."""
+        logger.info(message)
 
     @classmethod
     def warn(cls, message: str) -> None:
-        """Registra una advertencia en amarillo."""
-        print(f"{cls._get_timestamp()} {cls.COLOR_WARN}[AVISO] {message}{cls.COLOR_RESET}")
+        """Registra una advertencia/aviso."""
+        logger.warning(message)
 
     @classmethod
     def error(cls, message: str) -> None:
-        """Registra un error en rojo."""
-        print(f"{cls._get_timestamp()} {cls.COLOR_ERROR}[ERROR] {message}{cls.COLOR_RESET}")
+        """Registra un error crítico."""
+        logger.error(message)

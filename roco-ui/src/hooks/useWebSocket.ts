@@ -18,10 +18,10 @@ export interface WSMessage {
  * Hook personalizado para gestionar la comunicación bidireccional mediante WebSockets.
  * Implementa reconexión inteligente (backoff exponencial) y cola de mensajes fuera de línea.
  *
- * @param url Dirección del servidor WebSocket (por defecto: ws://localhost:8765).
+ * @param url Dirección del servidor WebSocket (por defecto: ws://localhost:8000/ws).
  * @returns API pública inmutable para interactuar con el socket y leer su estado.
  */
-export function useWebSocket(url: string = "ws://localhost:8765") {
+export function useWebSocket(url: string = "ws://localhost:8000/ws") {
   const [status, setStatus] = useState<WSStatus>("DISCONNECTED");
   const [messages, setMessages] = useState<WSMessage[]>([]);
 
