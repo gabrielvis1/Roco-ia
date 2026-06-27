@@ -873,7 +873,7 @@ export default function App() {
   }, [isDraggingPip]);
 
   return (
-    <div className="flex flex-col min-h-screen w-full bg-slate-950 text-slate-100 p-4 md:p-5 font-sans select-none relative overflow-y-auto">
+    <div className="h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden flex flex-col select-none relative font-sans">
       {/* Notificación Flotante */}
       {toast && (
         <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-50 bg-gamer-panel border border-gamer-neonGreen text-gamer-neonGreen px-4 py-2.5 rounded-lg shadow-[0_0_20px_rgba(57,255,20,0.25)] flex items-center gap-3 animate-pulse">
@@ -883,7 +883,7 @@ export default function App() {
       )}
 
       {/* Header Principal */}
-      <header className="flex flex-wrap justify-between items-center border-b border-gamer-border pb-4 mb-4 gap-4">
+      <header className="h-14 flex-none border-b border-slate-800/80 px-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           {/* LED de Conexión */}
           <div
@@ -943,11 +943,11 @@ export default function App() {
       </header>
 
       {/* Grid Principal */}
-      <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-5 pb-8">
+      <main className="flex-grow flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 p-4 min-h-0 overflow-hidden">
         {/* COLUMNA IZQUIERDA: Live Preview, Fuentes de Captura y Mezclador */}
-        <section className="lg:col-span-7 flex flex-col gap-4">
+        <section className="lg:col-span-7 flex flex-col h-full min-h-0 gap-4">
           {/* 1. Live Preview Screen */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-2">
+          <div className="bg-slate-900/50 rounded-lg border border-slate-800/80 p-3 flex flex-col gap-2 flex-none">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-1.5">
               <h3 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                 // TRANSMISIÓN EN VIVO
@@ -963,7 +963,7 @@ export default function App() {
             </div>
 
             {/* Marco de visualización (16:9) */}
-            <div className="relative aspect-video rounded-lg overflow-hidden border border-gamer-border bg-gamer-dark flex flex-col items-center justify-center">
+            <div className="flex-none aspect-video w-full bg-slate-900 rounded-lg border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center">
               {/* Pantalla CRT scanlines/grid */}
               <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,6px_100%] pointer-events-none z-10"></div>
 
@@ -1036,9 +1036,9 @@ export default function App() {
           </div>
 
           {/* Subgrid: OBS Sources y Mixer Vertical side-by-side */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 h-[250px]">
+          <div className="flex-grow flex-1 grid grid-cols-2 gap-4 mt-4 min-h-0 overflow-hidden">
             {/* A: Capture Sources (7 Columnas) */}
-            <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden">
+            <div className="flex flex-col h-full bg-slate-900/50 rounded-lg border border-slate-800/80 p-3 min-h-0">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
                 <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                   // FUENTES DE CAPTURA (OBS)
@@ -1051,7 +1051,7 @@ export default function App() {
                 </button>
               </div>
 
-              <div className="space-y-2 overflow-y-auto flex-1 pr-1">
+              <div className="space-y-2 overflow-y-auto flex-1 pr-1 custom-scrollbar">
                 {sources.length === 0 ? (
                   <div className="text-center text-xs text-slate-650 italic py-8">
                     No hay fuentes registradas.
@@ -1107,7 +1107,7 @@ export default function App() {
             </div>
 
             {/* B: Mezclador de Audio Vertical (5 Columnas) */}
-            <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden justify-between">
+            <div className="flex flex-col h-full bg-slate-900/50 rounded-lg border border-slate-800/80 p-3 min-h-0 justify-between gap-3">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
                 <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                   // AUDIO MIXER
@@ -1129,7 +1129,7 @@ export default function App() {
               </div>
 
               {/* Contenedor Vúmetro Vertical + Controles */}
-              <div className="flex flex-1 gap-4 items-center justify-center py-2 overflow-hidden">
+              <div className="flex flex-1 gap-4 items-center justify-center py-2 overflow-y-auto pr-1 custom-scrollbar">
                 {/* Vúmetro Canvas Vertical */}
                 <div className="flex flex-col items-center gap-1.5 h-full">
                   <div className="flex gap-1.5 items-stretch h-[140px]">
@@ -1171,9 +1171,9 @@ export default function App() {
         </section>
 
         {/* COLUMNA DERECHA: Configuración de Voz y Consola Cognitiva Chat & Logs */}
-        <section className="lg:col-span-5 flex flex-col h-full min-h-[500px] lg:min-h-0 flex-1 gap-4">
+        <section className="lg:col-span-5 flex flex-col h-full min-h-0 gap-4">
           {/* Tarjeta de Perfil e Idioma de Salida */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3">
+          <div className="bg-slate-900/50 rounded-lg border border-slate-800/80 p-3 flex flex-col gap-3 flex-none">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
               <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                 // CONFIGURACIÓN DE VOZ
@@ -1238,7 +1238,7 @@ export default function App() {
           </div>
 
           {/* Chat HUD Integrado con Logs de Red */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-full flex-1 overflow-hidden">
+          <div className="flex flex-col h-full bg-slate-900/50 rounded-lg border border-slate-800 p-4 min-h-0">
             <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2 mb-3 flex-none">
               <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                 // CONSOLA COGNITIVA INTEGRADA (CHAT & LOGS)
@@ -1246,7 +1246,7 @@ export default function App() {
             </div>
 
             {/* Ventana de mensajes integrada */}
-            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-3.5 pr-1 p-1 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg mb-3 min-h-0">
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto min-h-0 pr-2 space-y-3 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg custom-scrollbar">
               {chatMessages.length === 0 ? (
                 <div className="text-slate-655 italic text-center pt-20 text-xs font-mono">
                   Esperando flujo de eventos o interacción de voz...
@@ -1323,7 +1323,7 @@ export default function App() {
             </div>
 
             {/* Formulario e inputs de simulación */}
-            <div className="flex flex-col gap-2 mt-auto flex-none">
+            <div className="flex flex-col gap-2 flex-none mt-3 border-t border-slate-800 pt-3">
               <form onSubmit={handleSendChatMessage} className="flex gap-2">
                 <input
                   type="text"
@@ -1815,7 +1815,7 @@ export default function App() {
           </div>
 
           {/* Mini Live Preview */}
-          <div className="relative aspect-video rounded-lg overflow-hidden border border-gamer-border bg-gamer-dark flex flex-col items-center justify-center">
+          <div className="flex-none aspect-video w-full bg-slate-900 rounded-lg border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center">
             {previewImageSrc ? (
               <img
                 src={previewImageSrc}
