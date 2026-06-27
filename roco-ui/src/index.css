@@ -8,16 +8,7 @@
   }
 }
 
-/* Ocultar scrollbars molestas en vistas de juego/overlays */
-::-webkit-scrollbar {
-  width: 4px;
-}
-::-webkit-scrollbar-track {
-  @apply bg-transparent;
-}
-::-webkit-scrollbar-thumb {
-  @apply bg-gamer-border rounded-full;
-}
+
 
 @utility animate-scan {
   animation: scan 6s linear infinite;

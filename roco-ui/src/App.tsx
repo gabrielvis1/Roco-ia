@@ -873,7 +873,7 @@ export default function App() {
   }, [isDraggingPip]);
 
   return (
-    <div className="flex flex-col min-h-screen bg-gamer-dark p-4 md:p-5 text-slate-300 font-sans select-none relative overflow-y-auto">
+    <div className="flex flex-col min-h-screen w-full bg-slate-950 text-slate-100 p-4 md:p-5 font-sans select-none relative overflow-y-auto">
       {/* Notificación Flotante */}
       {toast && (
         <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-50 bg-gamer-panel border border-gamer-neonGreen text-gamer-neonGreen px-4 py-2.5 rounded-lg shadow-[0_0_20px_rgba(57,255,20,0.25)] flex items-center gap-3 animate-pulse">
@@ -944,206 +944,7 @@ export default function App() {
 
       {/* Grid Principal */}
       <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 md:gap-5 pb-8">
-        {/* COLUMNA IZQUIERDA: Configuración y Chat HUD Integrado */}
-        <section className="lg:col-span-5 flex flex-col gap-4">
-          {/* Tarjeta de Perfil e Idioma de Salida */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3">
-            <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
-              <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
-                // CONFIGURACIÓN DE VOZ
-              </h2>
-              <button
-                onClick={() => setShowAddProfileModal(true)}
-                className="text-[10px] font-mono font-bold px-2 py-0.5 border border-gamer-neonGreen/30 text-gamer-neonGreen bg-gamer-neonGreen/5 hover:bg-gamer-neonGreen hover:text-black rounded transition-all cursor-pointer"
-              >
-                + NUEVO JUEGO
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              {/* Selector de Juego */}
-              <div>
-                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
-                  PERFIL DE JUEGO
-                </label>
-                <div className="relative">
-                  <select
-                    value={activeGameId}
-                    onChange={(e) => {
-                      const selected = games.find((g) => g.profile_id === e.target.value);
-                      if (selected) handleSelectGame(selected.profile_id, selected.game_title);
-                    }}
-                    className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen appearance-none font-mono cursor-pointer"
-                  >
-                    <option value="" disabled>
-                      Selecciona...
-                    </option>
-                    {games.map((game) => (
-                      <option key={game.profile_id} value={game.profile_id}>
-                        {game.game_title}
-                      </option>
-                    ))}
-                  </select>
-                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500 text-[10px]">
-                    ▼
-                  </div>
-                </div>
-              </div>
-
-              {/* Selector de Idioma de Salida (Roco) */}
-              <div>
-                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
-                  IDIOMA NARRADOR (ROCO)
-                </label>
-                <select
-                  value={outputLang}
-                  onChange={(e) => {
-                    setOutputLang(e.target.value);
-                    handleSaveSetting("output_language", e.target.value);
-                  }}
-                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono cursor-pointer"
-                >
-                  <option value="es">Español (ES)</option>
-                  <option value="en">Inglés (EN)</option>
-                  <option value="pt">Portugués (PT)</option>
-                </select>
-              </div>
-            </div>
-          </div>
-
-          {/* Chat HUD Integrado con Logs de Red */}
-          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-[420px] overflow-hidden">
-            <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2 mb-3">
-              <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
-                // CONSOLA COGNITIVA INTEGRADA (CHAT & LOGS)
-              </h2>
-            </div>
-
-            {/* Ventana de mensajes integrada */}
-            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-3.5 pr-1 p-1 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg mb-3 min-h-[200px]">
-              {chatMessages.length === 0 ? (
-                <div className="text-slate-655 italic text-center pt-20 text-xs font-mono">
-                  Esperando flujo de eventos o interacción de voz...
-                </div>
-              ) : (
-                chatMessages.map((msg) => {
-                  if (msg.sender === "system") {
-                    const isExpanded = !!expandedLogIds[msg.id];
-                    let bannerStyle = "bg-sky-950/30 border-sky-500/30 text-sky-400";
-                    if (msg.type === "success") {
-                      bannerStyle = "bg-emerald-950/30 border-emerald-500/30 text-gamer-neonGreen";
-                    } else if (msg.type === "error") {
-                      bannerStyle = "bg-red-950/30 border-red-500/30 text-red-400";
-                    }
-
-                    return (
-                      <div key={msg.id} className="flex flex-col w-full my-2 px-2">
-                        <div
-                          className={`border rounded-lg px-3 py-2 text-[9px] font-mono flex items-center justify-between gap-3 ${bannerStyle}`}
-                        >
-                          <div className="flex items-center gap-2">
-                            <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
-                            <span>{msg.text}</span>
-                          </div>
-                          {msg.payload && (
-                            <button
-                              onClick={() => toggleLogExpand(msg.id)}
-                              className="px-2 py-0.5 border border-current/20 hover:border-current/50 rounded text-[8px] cursor-pointer transition-colors"
-                            >
-                              {isExpanded ? "OCULTAR JSON" : "VER JSON"}
-                            </button>
-                          )}
-                        </div>
-                        {isExpanded && msg.payload && (
-                          <pre className="mt-1 bg-gamer-dark p-2 rounded-lg text-[8px] font-mono text-slate-450 border border-gamer-border overflow-x-auto whitespace-pre-wrap break-all">
-                            {JSON.stringify(msg.payload, null, 2)}
-                          </pre>
-                        )}
-                      </div>
-                    );
-                  }
-
-                  const isUser = msg.sender === "user";
-                  return (
-                    <div
-                      key={msg.id}
-                      className={`flex ${isUser ? "justify-end" : "justify-start"} px-2`}
-                    >
-                      <div className={`flex flex-col max-w-[85%] gap-1`}>
-                        <div
-                          className={`flex items-center gap-1.5 text-[9px] text-slate-500 font-mono ${
-                            isUser ? "justify-end" : "justify-start"
-                          }`}
-                        >
-                          <span>{isUser ? "🎤 USER VOICE" : "🤖 ROCO IA"}</span>
-                          <span>•</span>
-                          <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
-                        </div>
-
-                        <div
-                          className={`rounded-xl px-3 py-2 text-xs font-mono leading-relaxed select-text ${
-                            isUser
-                              ? "bg-gamer-neonGreen/5 border border-gamer-neonGreen/30 text-slate-200 rounded-tr-none shadow-[0_0_12px_rgba(57,255,20,0.03)]"
-                              : "bg-gamer-panel border border-gamer-border text-slate-100 rounded-tl-none shadow-[0_0_12px_rgba(255,255,255,0.01)]"
-                          }`}
-                        >
-                          {msg.text}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-
-            {/* Formulario e inputs de simulación */}
-            <div className="flex flex-col gap-2">
-              <form onSubmit={handleSendChatMessage} className="flex gap-2">
-                <input
-                  type="text"
-                  placeholder="Escribe un mensaje para Roco o simula voz..."
-                  value={chatInputText}
-                  onChange={(e) => setChatInputText(e.target.value)}
-                  className="flex-1 bg-gamer-dark border border-gamer-border rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-gamer-neonGreen font-mono"
-                />
-                <button
-                  type="submit"
-                  className="bg-gamer-neonGreen text-black font-bold text-xs px-4 rounded-lg hover:bg-gamer-neonGreen/80 transition-colors cursor-pointer font-mono"
-                >
-                  ENVIAR
-                </button>
-              </form>
-
-              <div className="grid grid-cols-3 gap-2">
-                <button
-                  onClick={simulateVoiceInput}
-                  className="bg-gamer-panel border border-gamer-neonGreen/20 hover:border-gamer-neonGreen/50 text-gamer-neonGreen text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  🎤 SIMULAR VOZ
-                </button>
-                <button
-                  onClick={() =>
-                    simulateRocoResponse("Roco, ¿cuál es la debilidad elemental de este jefe?")
-                  }
-                  className="bg-gamer-panel border border-gamer-neonYellow/20 hover:border-gamer-neonYellow/50 text-gamer-neonYellow text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  🤖 SIMULAR ROCO
-                </button>
-                <button
-                  onClick={() => {
-                    setChatMessages([]);
-                    clearMessages();
-                  }}
-                  className="bg-gamer-panel border border-red-500/20 hover:border-red-500/40 text-red-400 text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  🗑️ LIMPIAR TODO
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* COLUMNA DERECHA: Preview de Video, Fuentes OBS y Mixer Vertical */}
+        {/* COLUMNA IZQUIERDA: Live Preview, Fuentes de Captura y Mezclador */}
         <section className="lg:col-span-7 flex flex-col gap-4">
           {/* 1. Live Preview Screen */}
           <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-2">
@@ -1235,9 +1036,9 @@ export default function App() {
           </div>
 
           {/* Subgrid: OBS Sources y Mixer Vertical side-by-side */}
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 h-[240px]">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 h-[250px]">
             {/* A: Capture Sources (7 Columnas) */}
-            <div className="md:col-span-7 bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden">
+            <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
                 <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                   // FUENTES DE CAPTURA (OBS)
@@ -1306,7 +1107,7 @@ export default function App() {
             </div>
 
             {/* B: Mezclador de Audio Vertical (5 Columnas) */}
-            <div className="md:col-span-5 bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden justify-between">
+            <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3 overflow-hidden justify-between">
               <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
                 <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
                   // AUDIO MIXER
@@ -1364,6 +1165,205 @@ export default function App() {
                     {volume}%
                   </div>
                 </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* COLUMNA DERECHA: Configuración de Voz y Consola Cognitiva Chat & Logs */}
+        <section className="lg:col-span-5 flex flex-col h-full min-h-[500px] lg:min-h-0 flex-1 gap-4">
+          {/* Tarjeta de Perfil e Idioma de Salida */}
+          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col gap-3">
+            <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2">
+              <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
+                // CONFIGURACIÓN DE VOZ
+              </h2>
+              <button
+                onClick={() => setShowAddProfileModal(true)}
+                className="text-[10px] font-mono font-bold px-2 py-0.5 border border-gamer-neonGreen/30 text-gamer-neonGreen bg-gamer-neonGreen/5 hover:bg-gamer-neonGreen hover:text-black rounded transition-all cursor-pointer"
+              >
+                + NUEVO JUEGO
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              {/* Selector de Juego */}
+              <div>
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  PERFIL DE JUEGO
+                </label>
+                <div className="relative">
+                  <select
+                    value={activeGameId}
+                    onChange={(e) => {
+                      const selected = games.find((g) => g.profile_id === e.target.value);
+                      if (selected) handleSelectGame(selected.profile_id, selected.game_title);
+                    }}
+                    className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen appearance-none font-mono cursor-pointer"
+                  >
+                    <option value="" disabled>
+                      Selecciona...
+                    </option>
+                    {games.map((game) => (
+                      <option key={game.profile_id} value={game.profile_id}>
+                        {game.game_title}
+                      </option>
+                    ))}
+                  </select>
+                  <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-2 text-slate-500 text-[10px]">
+                    ▼
+                  </div>
+                </div>
+              </div>
+
+              {/* Selector de Idioma de Salida (Roco) */}
+              <div>
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  IDIOMA NARRADOR (ROCO)
+                </label>
+                <select
+                  value={outputLang}
+                  onChange={(e) => {
+                    setOutputLang(e.target.value);
+                    handleSaveSetting("output_language", e.target.value);
+                  }}
+                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono cursor-pointer"
+                >
+                  <option value="es">Español (ES)</option>
+                  <option value="en">Inglés (EN)</option>
+                  <option value="pt">Portugués (PT)</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          {/* Chat HUD Integrado con Logs de Red */}
+          <div className="bg-gamer-panel border border-gamer-border rounded-xl p-4 flex flex-col h-full flex-1 overflow-hidden">
+            <div className="flex justify-between items-center border-b border-gamer-border/60 pb-2 mb-3 flex-none">
+              <h2 className="text-xs font-bold tracking-widest text-slate-400 uppercase font-mono">
+                // CONSOLA COGNITIVA INTEGRADA (CHAT & LOGS)
+              </h2>
+            </div>
+
+            {/* Ventana de mensajes integrada */}
+            <div ref={chatContainerRef} className="flex-1 overflow-y-auto space-y-3.5 pr-1 p-1 bg-gamer-dark/40 border border-gamer-border/40 rounded-lg mb-3 min-h-0">
+              {chatMessages.length === 0 ? (
+                <div className="text-slate-655 italic text-center pt-20 text-xs font-mono">
+                  Esperando flujo de eventos o interacción de voz...
+                </div>
+              ) : (
+                chatMessages.map((msg) => {
+                  if (msg.sender === "system") {
+                    const isExpanded = !!expandedLogIds[msg.id];
+                    let bannerStyle = "bg-sky-950/30 border-sky-500/30 text-sky-400";
+                    if (msg.type === "success") {
+                      bannerStyle = "bg-emerald-950/30 border-emerald-500/30 text-gamer-neonGreen";
+                    } else if (msg.type === "error") {
+                      bannerStyle = "bg-red-950/30 border-red-500/30 text-red-400";
+                    }
+
+                    return (
+                      <div key={msg.id} className="flex flex-col w-full my-2 px-2">
+                        <div
+                          className={`border rounded-lg px-3 py-2 text-[9px] font-mono flex items-center justify-between gap-3 ${bannerStyle}`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span className="h-1.5 w-1.5 rounded-full bg-current"></span>
+                            <span>{msg.text}</span>
+                          </div>
+                          {msg.payload && (
+                            <button
+                              onClick={() => toggleLogExpand(msg.id)}
+                              className="px-2 py-0.5 border border-current/20 hover:border-current/50 rounded text-[8px] cursor-pointer transition-colors"
+                            >
+                              {isExpanded ? "OCULTAR JSON" : "VER JSON"}
+                            </button>
+                          )}
+                        </div>
+                        {isExpanded && msg.payload && (
+                          <pre className="mt-1 bg-gamer-dark p-2 rounded-lg text-[8px] font-mono text-slate-450 border border-gamer-border overflow-x-auto whitespace-pre-wrap break-all">
+                            {JSON.stringify(msg.payload, null, 2)}
+                          </pre>
+                        )}
+                      </div>
+                    );
+                  }
+
+                  const isUser = msg.sender === "user";
+                  return (
+                    <div
+                      key={msg.id}
+                      className={`flex ${isUser ? "justify-end" : "justify-start"} px-2`}
+                    >
+                      <div className={`flex flex-col max-w-[85%] gap-1`}>
+                        <div
+                          className={`flex items-center gap-1.5 text-[9px] text-slate-500 font-mono ${
+                            isUser ? "justify-end" : "justify-start"
+                          }`}
+                        >
+                          <span>{isUser ? "🎤 USER VOICE" : "🤖 ROCO IA"}</span>
+                          <span>•</span>
+                          <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
+                        </div>
+
+                        <div
+                          className={`rounded-xl px-3 py-2 text-xs font-mono leading-relaxed select-text ${
+                            isUser
+                              ? "bg-gamer-neonGreen/5 border border-gamer-neonGreen/30 text-slate-200 rounded-tr-none shadow-[0_0_12px_rgba(57,255,20,0.03)]"
+                              : "bg-gamer-panel border border-gamer-border text-slate-100 rounded-tl-none shadow-[0_0_12px_rgba(255,255,255,0.01)]"
+                          }`}
+                        >
+                          {msg.text}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Formulario e inputs de simulación */}
+            <div className="flex flex-col gap-2 mt-auto flex-none">
+              <form onSubmit={handleSendChatMessage} className="flex gap-2">
+                <input
+                  type="text"
+                  placeholder="Escribe un mensaje para Roco o simula voz..."
+                  value={chatInputText}
+                  onChange={(e) => setChatInputText(e.target.value)}
+                  className="flex-1 bg-gamer-dark border border-gamer-border rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:border-gamer-neonGreen font-mono"
+                />
+                <button
+                  type="submit"
+                  className="bg-gamer-neonGreen text-black font-bold text-xs px-4 rounded-lg hover:bg-gamer-neonGreen/80 transition-colors cursor-pointer font-mono"
+                >
+                  ENVIAR
+                </button>
+              </form>
+
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={simulateVoiceInput}
+                  className="bg-gamer-panel border border-gamer-neonGreen/20 hover:border-gamer-neonGreen/50 text-gamer-neonGreen text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
+                >
+                  🎤 SIMULAR VOZ
+                </button>
+                <button
+                  onClick={() =>
+                    simulateRocoResponse("Roco, ¿cuál es la debilidad elemental de este jefe?")
+                  }
+                  className="bg-gamer-panel border border-gamer-neonYellow/20 hover:border-gamer-neonYellow/50 text-gamer-neonYellow text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
+                >
+                  🤖 SIMULAR ROCO
+                </button>
+                <button
+                  onClick={() => {
+                    setChatMessages([]);
+                    clearMessages();
+                  }}
+                  className="bg-gamer-panel border border-red-500/20 hover:border-red-500/40 text-red-400 text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
+                >
+                  🗑️ LIMPIAR TODO
+                </button>
               </div>
             </div>
           </div>

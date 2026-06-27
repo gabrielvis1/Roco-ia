@@ -114,3 +114,20 @@ button {
     background-color: #0f0f0f69;
   }
 }
+
+/* Custom minimal neon scrollbars for the gamer interface */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0b0d;
+}
+::-webkit-scrollbar-thumb {
+  background: #39ff14; /* Gamer Neon Green */
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #ffea00; /* Gamer Neon Yellow */
+}
+
