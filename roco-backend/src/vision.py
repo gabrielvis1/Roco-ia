@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import cast, Any, Callable, Dict, List, Optional, Tuple
 
+import mss
+import pygetwindow as gw
 import cv2
 import dxcam
 import imagehash
@@ -41,22 +43,30 @@ class VideoIngester:
         """Inicializa la fuente de captura de video.
 
         Args:
-            source_type: 'monitor' para DXcam, o 'camera' para OpenCV.
+            source_type: 'monitor', 'window' o 'camera'.
             target_id: ID físico o lógico de la fuente.
         """
         self.source_type = source_type
         self.target_id = target_id
         self.dx_camera: Optional[Any] = None
         self.cv_cap: Optional[cv2.VideoCapture] = None
+        self.sct: Optional[Any] = None
         self._init_source()
 
     def _init_source(self) -> None:
         """Inicializa la cámara o capturadora física/lógica."""
         try:
             if self.source_type == "monitor":
-                idx = int(self.target_id)
-                self.dx_camera = dxcam.create(device_idx=idx)
-                logger.info(f"DXcam inicializado en el monitor index {idx}")
+                try:
+                    idx = int(self.target_id)
+                    self.dx_camera = dxcam.create(device_idx=idx)
+                    logger.info(f"DXcam inicializado en el monitor index {idx}")
+                except Exception as ex:
+                    logger.warning(f"No se pudo iniciar DXcam, se usará mss como fallback: {ex}")
+                self.sct = mss.mss()
+            elif self.source_type == "window":
+                self.sct = mss.mss()
+                logger.info(f"Capturador de ventana MSS inicializado para {self.target_id}")
             elif self.source_type == "camera":
                 idx = int(self.target_id)
                 backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
@@ -78,11 +88,39 @@ class VideoIngester:
             Frame en formato BGR numpy o None si falla.
         """
         try:
-            if self.source_type == "monitor" and self.dx_camera:
-                frame = self.dx_camera.grab()
-                if frame is not None:
-                    # DXcam retorna RGB, convertimos a BGR
-                    return cast(np.ndarray, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+            if self.source_type == "monitor":
+                if self.dx_camera:
+                    frame = self.dx_camera.grab()
+                    if frame is not None:
+                        return cast(np.ndarray, cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
+                
+                # Fallback de mss
+                if self.sct:
+                    idx = int(self.target_id)
+                    if idx < len(self.sct.monitors):
+                        mon = self.sct.monitors[idx]
+                        img = self.sct.grab(mon)
+                        raw_frame = np.array(img)
+                        return cast(np.ndarray, cv2.cvtColor(raw_frame, cv2.COLOR_BGRA2BGR))
+
+            elif self.source_type == "window" and self.sct:
+                win = None
+                all_wins = gw.getAllWindows()
+                try:
+                    win = all_wins[int(self.target_id)]
+                except ValueError:
+                    for w in all_wins:
+                        if w.title == self.target_id:
+                            win = w
+                            break
+                if win:
+                    l, t, w_width, w_height = win.left, win.top, win.width, win.height
+                    if w_width > 0 and w_height > 0:
+                        bbox = {"left": l, "top": t, "width": w_width, "height": w_height}
+                        img = self.sct.grab(bbox)
+                        raw_frame = np.array(img)
+                        return cast(np.ndarray, cv2.cvtColor(raw_frame, cv2.COLOR_BGRA2BGR))
+
             elif self.source_type == "camera" and self.cv_cap:
                 ret, frame = self.cv_cap.read()
                 if ret:
@@ -99,6 +137,9 @@ class VideoIngester:
         if self.dx_camera:
             del self.dx_camera
             self.dx_camera = None
+        if self.sct:
+            self.sct.close()
+            self.sct = None
         logger.info("Recursos de VideoIngester liberados.")
 
 
@@ -392,6 +433,7 @@ class VisionPipeline:
                     await asyncio.sleep(0.1)
                     continue
 
+                self.last_frame = frame
                 h, w = frame.shape[:2]
 
                 # 2. Verificar si hay ROI guardado para este perfil
