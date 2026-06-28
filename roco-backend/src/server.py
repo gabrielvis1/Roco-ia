@@ -309,10 +309,18 @@ class WebSocketServer:
             cv2.putText(frame, "en su propia terminal: 'venv\\Scripts\\python main.py'", (50, 280),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1, cv2.LINE_AA)
         else:
-            cv2.putText(frame, "Nota: No se pudo capturar del dispositivo de video seleccionado.", (50, 190),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
-            cv2.putText(frame, "Verifique si el puerto/ID es correcto y si la camara esta activa.", (50, 215),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Nota: El dispositivo USB esta ocupado (p. ej., abierto en OBS) o inactivo.", (50, 180),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (0, 200, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "Soluciones rapidas:", (50, 210),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.42, (255, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, "1. En OBS: click derecho en fuente -> Proyector de ventana (fuente),", (50, 235),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 240), 1, cv2.LINE_AA)
+            cv2.putText(frame, "   y selecciona esa ventana de proyeccion en Roco (Pestaña Ventanas) [¡Recomendado!].", (50, 255),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (20, 255, 57), 1, cv2.LINE_AA)
+            cv2.putText(frame, "2. En OBS: inicia la 'Camara Virtual' y selecciona 'OBS Virtual Camera' aqui.", (50, 280),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 240), 1, cv2.LINE_AA)
+            cv2.putText(frame, "3. Cierra OBS o desactiva la camara alli para liberar el puerto USB.", (50, 305),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.38, (240, 240, 240), 1, cv2.LINE_AA)
 
         # Marca de tiempo en vivo
         ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
