@@ -391,6 +391,7 @@ class VisionPipeline:
         self.last_roi_small: Optional[np.ndarray] = None
         self.last_text: str = ""
         self.last_frame: Optional[np.ndarray] = None
+        self._processing_vision: bool = False
 
     def start(self) -> None:
         """Inicia el pipeline asíncrono en segundo plano."""
@@ -448,102 +449,100 @@ class VisionPipeline:
             logger.error(f"Error en filtro de duplicación: {e}")
             return False
 
+    async def _process_vision_async(self, frame: np.ndarray) -> None:
+        """Procesa YOLO y OCR de forma totalmente asíncrona sin bloquear la captura."""
+        if self._processing_vision:
+            return
+        self._processing_vision = True
+        try:
+            loop = asyncio.get_running_loop()
+            h, w = frame.shape[:2]
+
+            # 1. Verificar si hay ROI guardado para este perfil
+            roi_coords = self.get_roi_callback(self.active_profile)
+            detections = []
+            dialog_box: Optional[Dict[str, Any]] = None
+            avatar_detected = False
+            avatar_hash = ""
+            saved_zone_match = False
+
+            if roi_coords:
+                saved_zone_match = True
+                dialog_box = {
+                    "class": "dialog_box",
+                    "bbox": {
+                        "x1": roi_coords["x1"],
+                        "y1": roi_coords["y1"],
+                        "x2": roi_coords["x2"],
+                        "y2": roi_coords["y2"]
+                    },
+                    "confidence": 1.0
+                }
+            else:
+                detections = await loop.run_in_executor(
+                    self._executor, self.segmenter.detect, frame
+                )
+                for det in detections:
+                    if det["class"] == "dialog_box":
+                        if dialog_box is None or det["confidence"] > dialog_box["confidence"]:
+                            dialog_box = det
+                    elif det["class"] == "avatar":
+                        avatar_detected = True
+
+            # 2. Procesar OCR si hay caja de diálogo
+            if dialog_box:
+                bbox = dialog_box["bbox"]
+                x1_px = int(bbox["x1"] * w)
+                y1_px = int(bbox["y1"] * h)
+                x2_px = int(bbox["x2"] * w)
+                y2_px = int(bbox["y2"] * h)
+
+                if x2_px > x1_px and y2_px > y1_px:
+                    roi = frame[y1_px:y2_px, x1_px:x2_px]
+
+                    if avatar_detected:
+                        avatar_hash = hashlib.md5(roi.tobytes()).hexdigest()[:10]
+
+                    is_dup = self._is_duplicate_roi(roi)
+                    if is_dup and self.last_text:
+                        pass
+                    else:
+                        text, conf = await loop.run_in_executor(
+                            self._executor, self.ocr_engine.extract_text, roi
+                        )
+                        if text:
+                            self.last_text = text
+                            payload = {
+                                "text_raw": text,
+                                "confidence": conf,
+                                "bbox": bbox,
+                                "avatar_detected": avatar_detected,
+                                "avatar_hash": avatar_hash,
+                                "saved_zone_match": saved_zone_match
+                            }
+                            self.on_ocr_update(payload)
+        except Exception as e:
+            logger.error(f"Error procesando visión asíncrona: {e}")
+        finally:
+            self._processing_vision = False
+
     async def _loop(self) -> None:
-        """Bucle de ejecución a 10 FPS estrictos."""
+        """Bucle de captura a máxima velocidad (tiempo real)."""
         loop = asyncio.get_running_loop()
         while self._running:
-            start_time = time.time()
             try:
-                # 1. Captura de frame
                 frame = await loop.run_in_executor(self._executor, self.ingester.capture_frame)
                 if frame is None:
                     await asyncio.sleep(0)
                     continue
 
                 self.last_frame = frame
-                h, w = frame.shape[:2]
-
-                # 2. Verificar si hay ROI guardado para este perfil
-                roi_coords = self.get_roi_callback(self.active_profile)
-                detections = []
-                dialog_box: Optional[Dict[str, Any]] = None
-                avatar_detected = False
-                avatar_hash = ""
-                saved_zone_match = False
-
-                if roi_coords:
-                    # Omitir YOLO, usar coordenadas de calibración
-                    saved_zone_match = True
-                    dialog_box = {
-                        "class": "dialog_box",
-                        "bbox": {
-                            "x1": roi_coords["x1"],
-                            "y1": roi_coords["y1"],
-                            "x2": roi_coords["x2"],
-                            "y2": roi_coords["y2"]
-                        },
-                        "confidence": 1.0
-                    }
-                    logger.debug("ROI guardado detectado en SQLite. Omitiendo YOLOv11.")
-                else:
-                    # Ejecutar inferencia YOLO en hilo secundario
-                    detections = await loop.run_in_executor(
-                        self._executor, self.segmenter.detect, frame
-                    )
-                    # Encontrar diálogo y rostros (avatares)
-                    for det in detections:
-                        if det["class"] == "dialog_box":
-                            if dialog_box is None or det["confidence"] > dialog_box["confidence"]:
-                                dialog_box = det
-                        elif det["class"] == "avatar":
-                            avatar_detected = True
-
-                # 3. Si hay caja de diálogo, procesar OCR
-                if dialog_box:
-                    bbox = dialog_box["bbox"]
-                    x1_px = int(bbox["x1"] * w)
-                    y1_px = int(bbox["y1"] * h)
-                    x2_px = int(bbox["x2"] * w)
-                    y2_px = int(bbox["y2"] * h)
-
-                    # Evitar recortes vacíos o invertidos
-                    if x2_px > x1_px and y2_px > y1_px:
-                        roi = frame[y1_px:y2_px, x1_px:x2_px]
-
-                        # Calcular hash para avatar si se detectó
-                        if avatar_detected:
-                            # Generar un hash determinista a partir de los píxeles de la ROI
-                            avatar_hash = hashlib.md5(roi.tobytes()).hexdigest()[:10]
-
-                        # Filtro anti-duplicados
-                        is_dup = self._is_duplicate_roi(roi)
-                        if is_dup and self.last_text:
-                            # Conservar el texto anterior y no procesar OCR
-                            logger.debug("Filtro Anti-Duplicados: ROI idéntico. Reutilizando OCR previo.")
-                        else:
-                            # Ejecutar OCR en hilo secundario para no bloquear el bucle WebSocket
-                            text, conf = await loop.run_in_executor(
-                                self._executor, self.ocr_engine.extract_text, roi
-                            )
-                            if text:
-                                self.last_text = text
-                                # Emitir evento estruturado
-                                payload = {
-                                    "text_raw": text,
-                                    "confidence": conf,
-                                    "bbox": bbox,
-                                    "avatar_detected": avatar_detected,
-                                    "avatar_hash": avatar_hash,
-                                    "saved_zone_match": saved_zone_match
-                                }
-                                self.on_ocr_update(payload)
+                # Disparar tarea asíncrona para YOLO/OCR sin bloquear la captura
+                asyncio.create_task(self._process_vision_async(frame))
 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Error en bucle de visión computacional: {e}")
+                logger.error(f"Error en bucle de captura: {e}")
 
-            # Mantener la tasa estrictamente en 10 FPS
-            elapsed = time.time() - start_time
-            sleep_time = 0.0
-            await asyncio.sleep(sleep_time)
+            await asyncio.sleep(0)
