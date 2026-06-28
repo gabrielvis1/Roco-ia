@@ -96,8 +96,8 @@ export default function App() {
   // Active Preview Source (transmisión por websockets)
   const [activePreviewSource, setActivePreviewSource] = useState<CaptureSource | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
-  const [previewWidth, setPreviewWidth] = useState<number>(480);
-  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(50);
+  const [previewWidth, setPreviewWidth] = useState<number>(1080);
+  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(85);
 
   // Lista de Chat y Logs Integrada
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);

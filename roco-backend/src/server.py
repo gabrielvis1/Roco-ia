@@ -55,9 +55,9 @@ class WebSocketServer:
         self._mic_stream: Optional[sd.InputStream] = None
 
         # Configuración de previsualización en caliente
-        preview_width_str = self._db.get_setting("preview_width", "480") or "480"
+        preview_width_str = self._db.get_setting("preview_width", "1080") or "1080"
         self._preview_width: int = int(preview_width_str)
-        preview_quality_str = self._db.get_setting("preview_jpeg_quality", "50") or "50"
+        preview_quality_str = self._db.get_setting("preview_jpeg_quality", "85") or "85"
         self._preview_jpeg_quality: int = int(preview_quality_str)
 
         # Sincronización de configuraciones al arrancar
@@ -369,7 +369,7 @@ class WebSocketServer:
                     # Fallback temporal mientras carga o si falla la captura
                     frame = self._create_fallback_frame(source_type, target_id, "Iniciando captura o sin señal...")
                 await self._process_and_send_frame(websocket, frame)
-                await asyncio.sleep(0.1)
+                await asyncio.sleep(0.033)
         except asyncio.CancelledError:
             pass
         finally:
