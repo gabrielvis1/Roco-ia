@@ -75,10 +75,32 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS game_profiles (
                     profile_id TEXT PRIMARY KEY,
                     game_title TEXT NOT NULL,
-                    last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    last_played TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    roi_x1 REAL DEFAULT NULL,
+                    roi_y1 REAL DEFAULT NULL,
+                    roi_x2 REAL DEFAULT NULL,
+                    roi_y2 REAL DEFAULT NULL
                 )
                 """
             )
+
+            # Intentar agregar las columnas de ROI a perfiles existentes si no existen
+            try:
+                cursor.execute("ALTER TABLE game_profiles ADD COLUMN roi_x1 REAL DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE game_profiles ADD COLUMN roi_y1 REAL DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE game_profiles ADD COLUMN roi_x2 REAL DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass
+            try:
+                cursor.execute("ALTER TABLE game_profiles ADD COLUMN roi_y2 REAL DEFAULT NULL")
+            except sqlite3.OperationalError:
+                pass
 
             # Tabla 4: capture_sources
             cursor.execute(
@@ -368,5 +390,58 @@ class DatabaseManager:
         except sqlite3.Error as e:
             conn.rollback()
             raise RuntimeError(f"Error al eliminar fuente de captura '{name}': {e}")
+        finally:
+            conn.close()
+
+    def save_game_zone(self, profile_id: str, x1: float, y1: float, x2: float, y2: float) -> None:
+        """Guarda la zona de juego (ROI) para un perfil de juego.
+
+        Args:
+            profile_id: ID del perfil de juego.
+            x1, y1, x2, y2: Coordenadas de la región de interés relativas (0.0 a 1.0).
+        """
+        conn = self._get_connection()
+        try:
+            conn.execute(
+                """
+                UPDATE game_profiles
+                SET roi_x1 = ?, roi_y1 = ?, roi_x2 = ?, roi_y2 = ?
+                WHERE profile_id = ?
+                """,
+                (x1, y1, x2, y2, profile_id),
+            )
+            conn.commit()
+        except sqlite3.Error as e:
+            conn.rollback()
+            raise RuntimeError(f"Error al guardar zona ROI para perfil '{profile_id}': {e}")
+        finally:
+            conn.close()
+
+    def get_game_zone(self, profile_id: str) -> Optional[Dict[str, float]]:
+        """Obtiene la zona de juego (ROI) para un perfil de juego.
+
+        Args:
+            profile_id: ID del perfil de juego.
+
+        Returns:
+            Un diccionario con las coordenadas o None si no están configuradas.
+        """
+        conn = self._get_connection()
+        try:
+            cursor = conn.execute(
+                "SELECT roi_x1, roi_y1, roi_x2, roi_y2 FROM game_profiles WHERE profile_id = ?",
+                (profile_id,),
+            )
+            row = cursor.fetchone()
+            if row and row["roi_x1"] is not None:
+                return {
+                    "x1": row["roi_x1"],
+                    "y1": row["roi_y1"],
+                    "x2": row["roi_x2"],
+                    "y2": row["roi_y2"],
+                }
+            return None
+        except sqlite3.Error as e:
+            raise RuntimeError(f"Error al obtener zona ROI para perfil '{profile_id}': {e}")
         finally:
             conn.close()

@@ -12,6 +12,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Roco - Panel de Control",
         "width": 1000,
         "height": 650,
@@ -20,6 +21,15 @@
         "decorations": true,
         "transparent": false,
         "alwaysOnTop": true
+      },
+      {
+        "label": "overlay",
+        "title": "Roco - Overlay",
+        "transparent": true,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "fullscreen": true,
+        "visible": false
       }
     ],
     "security": {

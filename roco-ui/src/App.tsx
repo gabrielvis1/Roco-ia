@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { useWebSocket } from "./hooks/useWebSocket";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import { WebviewWindow } from "@tauri-apps/api/webviewWindow";
 
 interface GameProfile {
   profile_id: string;
@@ -54,6 +56,16 @@ export default function App() {
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
   const [isHudPassive, setIsHudPassive] = useState<boolean>(false);
   const [activeMic, setActiveMic] = useState<string>(""); // Perfil de micro en base de datos
+  const [windowLabel, setWindowLabel] = useState<string>("main");
+  const [ocrData, setOcrData] = useState<any>(null);
+
+  // Estados del lienzo de calibración ROI
+  const [isCalibrating, setIsCalibrating] = useState<boolean>(false);
+  const [roiBox, setRoiBox] = useState<{ x1: number; y1: number; x2: number; y2: number } | null>(null);
+  const [dragStart, setDragStart] = useState<{ x: number; y: number } | null>(null);
+  const [dragEnd, setDragEnd] = useState<{ x: number; y: number } | null>(null);
+
+  const containerRef = useRef<HTMLDivElement>(null);
 
   // --- Estados de Modales ---
   const [showAddProfileModal, setShowAddProfileModal] = useState<boolean>(false);
@@ -381,6 +393,92 @@ export default function App() {
     };
   }, [isMicActive, selectedBrowserDeviceId]);
 
+  useEffect(() => {
+    try {
+      const win = getCurrentWindow();
+      setWindowLabel(win.label);
+      
+      if (win.label === "overlay") {
+        invoke("set_hud_click_through", { ignore: true }).catch(console.error);
+      }
+    } catch (e) {
+      console.error("Failed to get current window label:", e);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (windowLabel !== "overlay") return;
+
+    const unlisten = listen<any>("ocr-update", (event) => {
+      setOcrData(event.payload);
+      
+      // Limpiar ocr después de 5 segundos de inactividad
+      const timer = setTimeout(() => {
+        setOcrData(null);
+      }, 5000);
+      return () => clearTimeout(timer);
+    });
+
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [windowLabel]);
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = (e.clientX - rect.left) / rect.width;
+    const y = (e.clientY - rect.top) / rect.height;
+    setDragStart({ x, y });
+    setDragEnd({ x, y });
+  };
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragStart || !containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const x = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+    const y = Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height));
+    setDragEnd({ x, y });
+  };
+
+  const handleMouseUp = () => {
+    if (!dragStart || !dragEnd) return;
+    const x1 = Math.min(dragStart.x, dragEnd.x);
+    const y1 = Math.min(dragStart.y, dragEnd.y);
+    const x2 = Math.max(dragStart.x, dragEnd.x);
+    const y2 = Math.max(dragStart.y, dragEnd.y);
+    
+    if (x2 - x1 > 0.01 && y2 - y1 > 0.01) {
+      setRoiBox({ x1, y1, x2, y2 });
+    }
+    setDragStart(null);
+    setDragEnd(null);
+  };
+
+  const getDragBoxStyle = () => {
+    if (!dragStart || !dragEnd) return {};
+    const x1 = Math.min(dragStart.x, dragEnd.x);
+    const y1 = Math.min(dragStart.y, dragEnd.y);
+    const x2 = Math.max(dragStart.x, dragEnd.x);
+    const y2 = Math.max(dragStart.y, dragEnd.y);
+    return {
+      left: `${x1 * 100}%`,
+      top: `${y1 * 100}%`,
+      width: `${(x2 - x1) * 100}%`,
+      height: `${(y2 - y1) * 100}%`,
+    };
+  };
+
+  const getRoiBoxStyle = () => {
+    if (!roiBox) return {};
+    return {
+      left: `${roiBox.x1 * 100}%`,
+      top: `${roiBox.y1 * 100}%`,
+      width: `${(roiBox.x2 - roiBox.x1) * 100}%`,
+      height: `${(roiBox.y2 - roiBox.y1) * 100}%`,
+    };
+  };
+
   // --- Procesamiento de Eventos WebSocket robusto ante cierres obsoletos ---
   useEffect(() => {
     if (messages.length === 0) return;
@@ -425,6 +523,19 @@ export default function App() {
             setPreviewJpegQuality(Number(settings.preview_jpeg_quality));
           }
 
+          // Restaurar hud_passive
+          const hudPassive =
+            settings.hud_passive === "1" ||
+            settings.hud_passive === "true" ||
+            settings.hud_passive === true;
+          setIsHudPassive(hudPassive);
+          if (hudPassive) {
+            WebviewWindow.getByLabel("overlay").then((win) => {
+              if (win) win.show().catch(console.error);
+            }).catch(console.error);
+            invoke("set_hud_click_through", { ignore: true }).catch(console.error);
+          }
+
           // Restaurar active_capture_source y previsualización
           const activeSrcName = settings.active_capture_source;
           if (activeSrcName && payload.sources) {
@@ -441,6 +552,28 @@ export default function App() {
         }
         triggerToast("Sincronización inicial con SQLite completada.");
         addSystemChat("Conexión del sistema establecida y sincronizada con SQLite.", "info", payload);
+        break;
+      }
+
+      case "OCR_DETECTION_UPDATE": {
+        const payload = lastMsg.payload;
+        if (payload) {
+          const ocrMsg: ChatMessage = {
+            id: `ocr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            sender: "roco",
+            text: payload.text_raw,
+            timestamp: new Date().toLocaleTimeString(),
+            type: "info"
+          };
+          setChatMessages((prev) => [...prev, ocrMsg]);
+          emit("ocr-update", payload).catch(console.error);
+        }
+        break;
+      }
+
+      case "SAVE_GAME_ZONE_ACK": {
+        triggerToast("Límites de calibración (ROI) guardados con éxito.");
+        addSystemChat("Zonas de juego de SQLite sincronizadas con éxito.", "success", lastMsg.payload);
         break;
       }
 
@@ -676,15 +809,24 @@ export default function App() {
   const handleToggleHudMode = async (passive: boolean) => {
     try {
       setIsHudPassive(passive);
-      await invoke("set_hud_mode", { passive });
+      const overlayWin = await WebviewWindow.getByLabel("overlay");
+      if (overlayWin) {
+        if (passive) {
+          await overlayWin.show();
+          await invoke("set_hud_click_through", { ignore: true });
+        } else {
+          await overlayWin.hide();
+        }
+      }
+      sendMessage("SAVE_SETTING", { key: "hud_passive", value: passive ? "true" : "false" });
       triggerToast(
         passive
-          ? "HUD Pasivo (Click-through) activado. Restablécelo desde la bandeja."
-          : "HUD Interactivo activado."
+          ? "HUD Pasivo (Click-through) activado. La ventana overlay es transparente y recibe datos en tiempo real."
+          : "HUD Desactivado."
       );
-      addSystemChat(passive ? "HUD en modo pasivo click-through." : "HUD en modo interactivo.", "info");
-    } catch (err) {
-      console.error("Fallo al cambiar modo de ventana:", err);
+      addSystemChat(passive ? "HUD en modo pasivo click-through activo." : "HUD ocultado.", "info");
+    } catch (e) {
+      console.error("Error setting HUD overlay window:", e);
       triggerToast("Error: No se pudo configurar el HUD.");
     }
   };
@@ -872,6 +1014,31 @@ export default function App() {
     };
   }, [isDraggingPip]);
 
+  if (windowLabel === "overlay") {
+    return (
+      <div className="h-screen w-screen bg-transparent overflow-hidden relative select-none pointer-events-none font-sans">
+        {ocrData && ocrData.bbox && (
+          <div
+            className="absolute border-2 border-emerald-500 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.4)] flex flex-col justify-end transition-all duration-200"
+            style={{
+              left: `${ocrData.bbox.x1 * 100}%`,
+              top: `${ocrData.bbox.y1 * 100}%`,
+              width: `${(ocrData.bbox.x2 - ocrData.bbox.x1) * 100}%`,
+              height: `${(ocrData.bbox.y2 - ocrData.bbox.y1) * 100}%`,
+            }}
+          >
+            {ocrData.text_raw && (
+              <div className="absolute top-full left-0 mt-2 bg-slate-900/90 border border-emerald-500 px-3 py-1.5 rounded-lg text-xs text-emerald-400 font-mono max-w-xl shadow-[0_0_12px_rgba(16,185,129,0.2)] pointer-events-none animate-pulse">
+                {ocrData.avatar_detected ? `[Avatar: ${ocrData.avatar_hash}] ` : ""}
+                {ocrData.text_raw}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden flex flex-col select-none relative font-sans">
       {/* Notificación Flotante */}
@@ -963,7 +1130,35 @@ export default function App() {
             </div>
 
             {/* Marco de visualización (16:9) */}
-            <div className="flex-none aspect-video w-full bg-slate-900 rounded-lg border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center">
+            <div ref={containerRef} className="flex-none aspect-video w-full bg-slate-900 rounded-lg border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center">
+              {isCalibrating && (
+                <div
+                  className="absolute inset-0 z-30 cursor-crosshair bg-black/40 select-none"
+                  onMouseDown={handleMouseDown}
+                  onMouseMove={handleMouseMove}
+                  onMouseUp={handleMouseUp}
+                >
+                  {dragStart && dragEnd && (
+                    <div
+                      className="absolute border-2 border-dashed border-gamer-neonGreen bg-gamer-neonGreen/10"
+                      style={getDragBoxStyle()}
+                    />
+                  )}
+                  {roiBox && !dragStart && (
+                    <div
+                      className="absolute border-2 border-gamer-neonGreen bg-gamer-neonGreen/20 flex items-center justify-center"
+                      style={getRoiBoxStyle()}
+                    >
+                      <span className="text-[10px] text-gamer-neonGreen font-mono bg-black/85 px-2 py-0.5 border border-gamer-neonGreen rounded shadow-md">
+                        ZONA DE SUBTÍTULOS
+                      </span>
+                    </div>
+                  )}
+                  <div className="absolute top-2 left-2 bg-black/85 border border-gamer-neonGreen/40 text-slate-200 text-[10px] font-mono p-2 rounded max-w-[280px]">
+                    💡 Haz click y arrastra el cursor para definir la zona de subtítulos.
+                  </div>
+                </div>
+              )}
               {/* Pantalla CRT scanlines/grid */}
               <div className="absolute inset-0 bg-[linear-gradient(rgba(18,16,16,0)_50%,rgba(0,0,0,0.25)_50%),linear-gradient(90deg,rgba(255,0,0,0.06),rgba(0,255,0,0.02),rgba(0,0,255,0.06))] bg-[size:100%_4px,6px_100%] pointer-events-none z-10"></div>
 
@@ -990,6 +1185,49 @@ export default function App() {
 
             {/* Controles de Calidad y Resolución en Vivo */}
             <div className="flex flex-wrap items-center justify-between gap-3 pt-1.5 border-t border-gamer-border/40 mt-1">
+              {/* Calibración interactiva */}
+              <div className="flex items-center gap-2">
+                {isCalibrating ? (
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (roiBox) {
+                          sendMessage("SAVE_GAME_ZONE", roiBox);
+                          setIsCalibrating(false);
+                        } else {
+                          triggerToast("Dibuja una caja primero.");
+                        }
+                      }}
+                      className="px-2.5 py-1 rounded text-[10px] font-mono font-bold bg-gamer-neonGreen text-black hover:bg-gamer-neonGreen/80 transition-all cursor-pointer"
+                    >
+                      GUARDAR ZONA
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsCalibrating(false);
+                        setDragStart(null);
+                        setDragEnd(null);
+                      }}
+                      className="px-2.5 py-1 rounded text-[10px] font-mono font-bold bg-slate-700 text-slate-200 hover:bg-slate-600 transition-all cursor-pointer"
+                    >
+                      CANCELAR
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCalibrating(true);
+                      setRoiBox(null);
+                    }}
+                    className="px-2.5 py-1 rounded text-[10px] font-mono font-bold border border-gamer-neonGreen/30 text-gamer-neonGreen bg-gamer-neonGreen/5 hover:bg-gamer-neonGreen hover:text-black transition-all cursor-pointer"
+                  >
+                    ⚙️ CALIBRAR ZONA
+                  </button>
+                )}
+              </div>
               {/* Resolución */}
               <div className="flex items-center gap-2">
                 <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">

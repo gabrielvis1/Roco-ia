@@ -23,6 +23,7 @@ from .config import SystemConfig
 from .database import DatabaseManager
 from .hardware import HardwareScanner
 from .utils import AsyncLogger
+from .vision import VisionPipeline
 
 
 class WebSocketServer:
@@ -58,6 +59,20 @@ class WebSocketServer:
         self._preview_width: int = int(preview_width_str)
         preview_quality_str = self._db.get_setting("preview_jpeg_quality", "50") or "50"
         self._preview_jpeg_quality: int = int(preview_quality_str)
+
+        # Sincronización de configuraciones al arrancar
+        self.active_game_profile: str = self._db.get_setting("active_game_profile", "default") or "default"
+        self.output_language: str = self._db.get_setting("output_language", "es") or "es"
+        self.active_capture_source: str = self._db.get_setting("active_capture_source", "") or ""
+        self.microphone_device_id: str = self._db.get_setting("microphone_device_id", "default") or "default"
+        self.microphone_active: bool = (self._db.get_setting("microphone_active", "1") in ("1", "true", "True", True))
+        try:
+            self.microphone_gain: int = int(self._db.get_setting("microphone_gain", "80") or "80")
+        except ValueError:
+            self.microphone_gain = 80
+
+        # Pipeline de visión
+        self._vision_pipeline: Optional[VisionPipeline] = None
 
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
@@ -116,7 +131,7 @@ class WebSocketServer:
             profiles = self._db.get_game_profiles()
             api_keys = self._db.list_api_keys()
             sources = self._db.get_capture_sources()
-            audio_devices = HardwareScanner.get_audio_devices()
+            audio_devices = await asyncio.get_running_loop().run_in_executor(None, HardwareScanner.get_audio_devices)
 
             handshake_payload: Dict[str, Any] = {
                 "event": "SYSTEM_STATUS",
@@ -321,21 +336,46 @@ class WebSocketServer:
             source_type: Tipo de fuente ('monitor', 'window', 'camera').
             target_id: Identificador físico o lógico del objetivo.
         """
-        cap = None
-        if source_type == "camera":
-            cap = self._init_camera(target_id)
+        loop = asyncio.get_running_loop()
+
+        # Registrar la fuente activa
+        self.active_capture_source = f"{source_type}:{target_id}"
+        self._db.save_setting("active_capture_source", self.active_capture_source)
+
+        # Inicializar el pipeline de visión de forma no bloqueante
+        def on_ocr_update(ocr_payload: Dict[str, Any]) -> None:
+            asyncio.run_coroutine_threadsafe(
+                self._send_json(websocket, {
+                    "event": "OCR_DETECTION_UPDATE",
+                    "timestamp": datetime.now().isoformat(),
+                    "payload": ocr_payload
+                }),
+                loop
+            )
+
+        self._vision_pipeline = VisionPipeline(
+            source_type=source_type,
+            target_id=target_id,
+            active_profile=self.active_game_profile,
+            get_roi_callback=self._db.get_game_zone,
+            on_ocr_update=on_ocr_update
+        )
+        self._vision_pipeline.start()
 
         try:
             while self._preview_active:
-                frame = self._get_frame(source_type, target_id, cap)
-                if frame is not None:
-                    await self._process_and_send_frame(websocket, frame)
+                frame = self._vision_pipeline.last_frame if self._vision_pipeline else None
+                if frame is None:
+                    # Fallback temporal mientras carga o si falla la captura
+                    frame = self._create_fallback_frame(source_type, target_id, "Iniciando captura o sin señal...")
+                await self._process_and_send_frame(websocket, frame)
                 await asyncio.sleep(0.1)
         except asyncio.CancelledError:
             pass
         finally:
-            if cap:
-                cap.release()
+            if self._vision_pipeline:
+                await self._vision_pipeline.stop()
+                self._vision_pipeline = None
             self._logger.info("Ciclo de captura de previsualización cerrado limpiamente.")
 
     # --- Controladores de Eventos ---
@@ -386,8 +426,25 @@ class WebSocketServer:
 
     def _update_preview_and_audio_cache(self, key: str, value: Any) -> None:
         """Actualiza la escucha de audio y la caché de previsualización en caliente."""
-        if key in ("microphone_active", "microphone_device_id", "active_mic"):
+        if key == "active_game_profile":
+            self.active_game_profile = str(value)
+            if self._vision_pipeline:
+                self._vision_pipeline.active_profile = str(value)
+        elif key == "output_language":
+            self.output_language = str(value)
+        elif key == "active_capture_source":
+            self.active_capture_source = str(value)
+        elif key in ("microphone_active", "microphone_device_id", "active_mic"):
+            if key == "microphone_active":
+                self.microphone_active = (str(value) in ("1", "true", "True", True))
+            elif key in ("microphone_device_id", "active_mic"):
+                self.microphone_device_id = str(value)
             self._start_mic_listener()
+        elif key == "microphone_gain":
+            try:
+                self.microphone_gain = int(value)
+            except ValueError:
+                pass
         elif key == "preview_width":
             try:
                 self._preview_width = int(value)
@@ -504,9 +561,10 @@ class WebSocketServer:
 
     async def _handle_get_hardware_sources(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
         """Devuelve la lista actual de monitores, cámaras USB y ventanas activas del SO."""
-        usb_devices = HardwareScanner.get_usb_cameras()
-        monitors = HardwareScanner.get_monitors()
-        windows = HardwareScanner.get_active_windows()
+        loop = asyncio.get_running_loop()
+        usb_devices = await loop.run_in_executor(None, HardwareScanner.get_usb_cameras)
+        monitors = await loop.run_in_executor(None, HardwareScanner.get_monitors)
+        windows = await loop.run_in_executor(None, HardwareScanner.get_active_windows)
 
         await self._send_json(websocket, {
             "event": "GET_HARDWARE_SOURCES_ACK",
@@ -520,6 +578,28 @@ class WebSocketServer:
                 }
             }
         })
+
+    async def _handle_save_game_zone(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Guarda las coordenadas relativas de calibración (ROI) en la base de datos."""
+        x1 = payload.get("x1")
+        y1 = payload.get("y1")
+        x2 = payload.get("x2")
+        y2 = payload.get("y2")
+
+        if x1 is not None and y1 is not None and x2 is not None and y2 is not None:
+            profile_id = self.active_game_profile
+            self._db.save_game_zone(profile_id, float(x1), float(y1), float(x2), float(y2))
+            self._logger.success(f"Zona ROI guardada para el perfil '{profile_id}': ({x1}, {y1}) a ({x2}, {y2})")
+
+            await self._send_json(websocket, {
+                "event": "SAVE_GAME_ZONE_ACK",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "status": "success",
+                    "profile_id": profile_id,
+                    "zone": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                }
+            })
 
     async def _handle_save_capture_source(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
         """Guarda una nueva fuente en SQLite y devuelve la lista actualizada."""
@@ -593,6 +673,7 @@ class WebSocketServer:
                 "GET_HARDWARE_SOURCES": self._handle_get_hardware_sources,
                 "SAVE_CAPTURE_SOURCE": self._handle_save_capture_source,
                 "DELETE_CAPTURE_SOURCE": self._handle_delete_capture_source,
+                "SAVE_GAME_ZONE": self._handle_save_game_zone,
             }
 
             if event in handlers:

@@ -12,6 +12,15 @@ fn set_hud_mode(window: WebviewWindow, passive: bool) -> Result<(), String> {
     window.set_ignore_cursor_events(passive).map_err(|e| e.to_string())
 }
 
+/// Comando de Tauri para habilitar click-through pasivo en la ventana HUD.
+#[tauri::command]
+fn set_hud_click_through(app: tauri::AppHandle, ignore: bool) -> Result<(), String> {
+    if let Some(window) = app.get_webview_window("overlay") {
+        window.set_ignore_cursor_events(ignore).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Comando para actualizar dinámicamente la lista de perfiles rápidos en el submenú de la bandeja.
 #[tauri::command]
 fn update_quick_profiles(app: tauri::AppHandle, profiles: Vec<String>) -> Result<(), String> {
@@ -38,7 +47,7 @@ fn update_quick_profiles(app: tauri::AppHandle, profiles: Vec<String>) -> Result
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![set_hud_mode, update_quick_profiles])
+        .invoke_handler(tauri::generate_handler![set_hud_mode, update_quick_profiles, set_hud_click_through])
         .setup(|app| {
             // Inicializar menú contextual nativo base
             let show = MenuItem::with_id(app, "show", "Abrir Panel", true, None::<&str>)?;
