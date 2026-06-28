@@ -23,7 +23,7 @@ export interface WSMessage {
  */
 export function useWebSocket(url: string = "ws://localhost:8000/ws") {
   const [status, setStatus] = useState<WSStatus>("DISCONNECTED");
-  const [messages, setMessages] = useState<WSMessage[]>([]);
+  const [lastMessage, setLastMessage] = useState<WSMessage | null>(null);
 
   // Referencias para almacenar instancias y estados mutables sin provocar re-renderizados
   const socketRef = useRef<WebSocket | null>(null);
@@ -95,7 +95,7 @@ export function useWebSocket(url: string = "ws://localhost:8000/ws") {
               timestamp: String(rawData.timestamp || new Date().toISOString()),
               payload: rawData.payload as Record<string, any>,
             };
-            setMessages((prev) => [...prev, wsMessage]);
+            setLastMessage(wsMessage);
           }
         } catch (err) {
           console.error("Error al deserializar el mensaje de entrada:", err);
@@ -154,7 +154,7 @@ export function useWebSocket(url: string = "ws://localhost:8000/ws") {
    * Utilidad para vaciar el historial local de logs de la consola en la interfaz.
    */
   const clearMessages = useCallback(() => {
-    setMessages([]);
+    setLastMessage(null);
   }, []);
 
   // Efecto que controla el montaje inicial y desmontaje
@@ -183,7 +183,7 @@ export function useWebSocket(url: string = "ws://localhost:8000/ws") {
   // Exponer API pública inmutable
   return {
     status,
-    messages,
+    lastMessage,
     sendMessage,
     clearMessages,
   };

@@ -42,7 +42,7 @@ interface ChatMessage {
 
 export default function App() {
   // Consumir el hook de comunicación con el backend de Python
-  const { status, messages, sendMessage, clearMessages } = useWebSocket("ws://localhost:8000/ws");
+  const { status, lastMessage, sendMessage, clearMessages } = useWebSocket("ws://localhost:8000/ws");
 
   // --- Estados de Datos ---
   const [games, setGames] = useState<GameProfile[]>([]);
@@ -481,8 +481,8 @@ export default function App() {
 
   // --- Procesamiento de Eventos WebSocket robusto ante cierres obsoletos ---
   useEffect(() => {
-    if (messages.length === 0) return;
-    const lastMsg = messages[messages.length - 1];
+    if (!lastMessage) return;
+    const lastMsg = lastMessage;
 
     // Evitar procesamiento duplicado del mismo mensaje
     const msgKey = lastMsg.timestamp + lastMsg.event;
@@ -539,14 +539,20 @@ export default function App() {
           // Restaurar active_capture_source y previsualización
           const activeSrcName = settings.active_capture_source;
           if (activeSrcName && payload.sources) {
-            const foundSrc = payload.sources.find((s: any) => s.name === activeSrcName);
-            if (foundSrc) {
-              setActivePreviewSource(foundSrc);
-              setPreviewImageSrc(null);
-              sendMessage("START_PREVIEW", {
-                type: foundSrc.type,
-                target_id: foundSrc.target_id,
-              });
+            const parts = activeSrcName.split(":");
+            if (parts.length === 2) {
+              const [sType, sTargetId] = parts;
+              const foundSrc = payload.sources.find(
+                (s: any) => s.type === sType && String(s.target_id) === String(sTargetId)
+              );
+              if (foundSrc) {
+                setActivePreviewSource(foundSrc);
+                setPreviewImageSrc(null);
+                sendMessage("START_PREVIEW", {
+                  type: foundSrc.type,
+                  target_id: foundSrc.target_id,
+                });
+              }
             }
           }
         }
@@ -712,7 +718,7 @@ export default function App() {
       default:
         break;
     }
-  }, [messages, games, newSourceType, activePreviewSource, newSourceName]);
+  }, [lastMessage, games, newSourceType, activePreviewSource, newSourceName]);
 
   // Auto-scroll del chat integrado
   useEffect(() => {

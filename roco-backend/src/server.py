@@ -56,8 +56,15 @@ class WebSocketServer:
 
         # Configuración de previsualización en caliente
         preview_width_str = self._db.get_setting("preview_width", "0") or "0"
+        if preview_width_str == "480":
+            preview_width_str = "0"
+            self._db.save_setting("preview_width", "0")
         self._preview_width: int = int(preview_width_str)
+
         preview_quality_str = self._db.get_setting("preview_jpeg_quality", "95") or "95"
+        if preview_quality_str == "50":
+            preview_quality_str = "95"
+            self._db.save_setting("preview_jpeg_quality", "95")
         self._preview_jpeg_quality: int = int(preview_quality_str)
 
         # Sincronización de configuraciones al arrancar
