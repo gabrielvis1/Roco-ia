@@ -70,12 +70,39 @@ class VideoIngester:
             elif self.source_type == "camera":
                 idx = int(self.target_id)
                 backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+                
+                # Reintento 1: 1080p MJPG
                 self.cv_cap = cv2.VideoCapture(idx, backend)
                 if self.cv_cap.isOpened():
-                    # Limitar resolución a 1080p máximo
+                    self.cv_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # type: ignore
                     self.cv_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1920)
                     self.cv_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-                    logger.info(f"OpenCV DirectShow inicializado para cámara {idx} en 1080p")
+                    ret, test_frame = self.cv_cap.read()
+                    if ret and test_frame is not None:
+                        logger.info(f"OpenCV DirectShow inicializado para cámara {idx} en 1080p (MJPG)")
+                        return
+                    self.cv_cap.release()
+
+                # Reintento 2: 720p MJPG
+                self.cv_cap = cv2.VideoCapture(idx, backend)
+                if self.cv_cap.isOpened():
+                    self.cv_cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))  # type: ignore
+                    self.cv_cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+                    self.cv_cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+                    ret, test_frame = self.cv_cap.read()
+                    if ret and test_frame is not None:
+                        logger.info(f"OpenCV DirectShow inicializado para cámara {idx} en 720p (MJPG)")
+                        return
+                    self.cv_cap.release()
+
+                # Reintento 3: Resoluciones por defecto (Driver Default)
+                self.cv_cap = cv2.VideoCapture(idx, backend)
+                if self.cv_cap.isOpened():
+                    ret, test_frame = self.cv_cap.read()
+                    if ret and test_frame is not None:
+                        logger.info(f"OpenCV DirectShow inicializado para cámara {idx} con resolución por defecto")
+                        return
+                    logger.warning(f"Cámara {idx} abierta pero no se pudo leer ningún frame")
                 else:
                     logger.warning(f"No se pudo abrir la cámara index {idx} con OpenCV")
         except Exception as e:
