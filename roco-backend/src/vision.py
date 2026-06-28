@@ -457,7 +457,7 @@ class VisionPipeline:
                 # 1. Captura de frame
                 frame = await loop.run_in_executor(self._executor, self.ingester.capture_frame)
                 if frame is None:
-                    await asyncio.sleep(0.033)
+                    await asyncio.sleep(0.001)
                     continue
 
                 self.last_frame = frame
@@ -545,5 +545,5 @@ class VisionPipeline:
 
             # Mantener la tasa estrictamente en 10 FPS
             elapsed = time.time() - start_time
-            sleep_time = max(0.0, 0.033 - elapsed)
+            sleep_time = max(0.0, 0.001 - elapsed)
             await asyncio.sleep(sleep_time)

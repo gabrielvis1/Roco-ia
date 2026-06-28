@@ -96,8 +96,8 @@ export default function App() {
   // Active Preview Source (transmisión por websockets)
   const [activePreviewSource, setActivePreviewSource] = useState<CaptureSource | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
-  const [previewWidth, setPreviewWidth] = useState<number>(1080);
-  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(85);
+  const [previewWidth, setPreviewWidth] = useState<number>(0);
+  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(95);
 
   // Lista de Chat y Logs Integrada
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
@@ -1234,7 +1234,7 @@ export default function App() {
                   Resolución:
                 </span>
                 <div className="flex bg-gamer-dark border border-gamer-border rounded p-0.5 overflow-hidden">
-                  {[480, 720, 1080].map((w) => (
+                  {[480, 720, 1080, 0].map((w) => (
                     <button
                       key={w}
                       type="button"
@@ -1245,7 +1245,7 @@ export default function App() {
                           : "text-slate-500 hover:text-slate-350"
                       }`}
                     >
-                      {w === 480 ? "480p" : w === 720 ? "720p" : "1080p"}
+                      {w === 0 ? "Original" : w === 480 ? "480p" : w === 720 ? "720p" : "1080p"}
                     </button>
                   ))}
                 </div>
@@ -1264,7 +1264,7 @@ export default function App() {
                 <input
                   type="range"
                   min="30"
-                  max="95"
+                  max="100"
                   value={previewJpegQuality}
                   onChange={(e) => handlePreviewJpegQualityChange(Number(e.target.value))}
                   className="w-24 accent-gamer-neonGreen bg-gamer-dark border border-gamer-border rounded h-1 cursor-pointer"
