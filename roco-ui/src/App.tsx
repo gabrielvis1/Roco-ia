@@ -97,7 +97,7 @@ export default function App() {
   const [activePreviewSource, setActivePreviewSource] = useState<CaptureSource | null>(null);
   const [previewImageSrc, setPreviewImageSrc] = useState<string | null>(null);
   const [previewWidth, setPreviewWidth] = useState<number>(0);
-  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(95);
+  const [previewJpegQuality, setPreviewJpegQuality] = useState<number>(100);
 
   // Lista de Chat y Logs Integrada
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
