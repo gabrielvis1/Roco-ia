@@ -297,22 +297,33 @@ class OCREngine:
             logger.error(f"Falla al cargar EasyOCR: {e}")
 
     def preprocess_image(self, roi: np.ndarray) -> np.ndarray:
-        """Aplica redimensionamiento y umbralización adaptativa en B/N.
+        """Aplica preprocesamiento avanzado (escala de grises, filtro bilateral, Otsu y auto-inversión).
 
         Args:
             roi: Imagen BGR de la región de interés.
 
         Returns:
-            Imagen binarizada en escala de grises.
+            Imagen binarizada limpia en escala de grises.
         """
         try:
+            # 1. Conversión a escala de grises estricta
             gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            # Escalar hacia arriba (2x) para aumentar legibilidad de fuentes pequeñas
-            scaled = cv2.resize(gray, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-            # Filtro adaptativo gaussiano para limpiar ruido de fondo
-            binary = cv2.adaptiveThreshold(
-                scaled, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-            )
+            
+            # 2. Filtro bilateral para suavizar texturas de fondo y preservar bordes de texto
+            filtered = cv2.bilateralFilter(gray, 9, 75, 75)
+            
+            # 3. Redimensionar al doble (2x) si la ROI es pequeña (ancho < 300 o alto < 100)
+            h, w = roi.shape[:2]
+            if w < 300 or h < 100:
+                filtered = cv2.resize(filtered, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+            
+            # 4. Umbralización adaptativa o método de Otsu para forzar blanco sobre negro absoluto
+            _, binary = cv2.threshold(filtered, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            
+            # 5. Si el fondo es predominantemente blanco, invertir la imagen para tener texto blanco sobre negro
+            if np.mean(binary) > 127:
+                binary = cv2.bitwise_not(binary)
+                
             return binary
         except Exception as e:
             logger.error(f"Fallo en preprocesamiento de imagen OCR: {e}")
@@ -511,16 +522,34 @@ class VisionPipeline:
                             self._executor, self.ocr_engine.extract_text, roi
                         )
                         if text:
-                            self.last_text = text
-                            payload = {
-                                "text_raw": text,
-                                "confidence": conf,
-                                "bbox": bbox,
-                                "avatar_detected": avatar_detected,
-                                "avatar_hash": avatar_hash,
-                                "saved_zone_match": saved_zone_match
-                            }
-                            self.on_ocr_update(payload)
+                            # Saneamiento de texto por regex whitelist
+                            import re
+                            try:
+                                # Whitelist pattern: a-zA-Z, accented letters, digits, spaces, basic punctuation
+                                pattern = re.compile(
+                                    r'[^a-zA-Z0-9\s\u00e1\u00e9\u00ed\u00f3\u00fa\u00c1\u00c9\u00cd\u00d3\u00da\u00f1\u00d1\u00fc\u00dc\u00bf\u003f\u00a1\u0021\u002e\u002c\u003a\u003b\u002d\u0022\u0027\u0028\u0029]'
+                                )
+                                text_sanitized = pattern.sub('', text)
+                                text_sanitized = re.sub(r'\s+', ' ', text_sanitized).strip()
+                                
+                                # Validar que tenga al menos 3 caracteres útiles (letras/números)
+                                useful_chars = sum(1 for c in text_sanitized if c.isalnum())
+                            except Exception as sanitize_err:
+                                logger.error(f"Error sanitizando texto: {sanitize_err}")
+                                text_sanitized = ""
+                                useful_chars = 0
+
+                            if text_sanitized and useful_chars >= 3:
+                                self.last_text = text_sanitized
+                                payload = {
+                                    "text_raw": text_sanitized,
+                                    "confidence": conf,
+                                    "bbox": bbox,
+                                    "avatar_detected": avatar_detected,
+                                    "avatar_hash": avatar_hash,
+                                    "saved_zone_match": saved_zone_match
+                                }
+                                self.on_ocr_update(payload)
         except Exception as e:
             logger.error(f"Error procesando visión asíncrona: {e}")
         finally:

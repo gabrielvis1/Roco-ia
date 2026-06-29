@@ -115,6 +115,7 @@ export default function App() {
   // Notificación Toast
   const [toast, setToast] = useState<string | null>(null);
   const [isRocoSpeaking, setIsRocoSpeaking] = useState<boolean>(false);
+  const [pendingOcr, setPendingOcr] = useState<any>(null);
 
   // Referencias para el Vúmetro
   const vuCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -143,6 +144,16 @@ export default function App() {
     }, 4000);
   };
 
+  const handleApproveOcr = () => {
+    sendMessage("OCR_APPROVED", {});
+    setPendingOcr(null);
+  };
+
+  const handleRejectOcr = () => {
+    setPendingOcr(null);
+    emit("ocr-approved", { text_raw: "" }).catch(console.error);
+  };
+
   // Escuchar atajos nativos de teclado globales y locales de la Fase 6
   useEffect(() => {
     // 1. Alternar Micrófono (CTRL+ALT+M)
@@ -153,7 +164,8 @@ export default function App() {
 
     // 2. Aprobación Rápida de OCR (CTRL+ALT+A)
     const unlistenApproveOcr = listen("hotkey_approve_ocr", () => {
-      sendMessage("APPROVE_OCR_DIALOG", {});
+      sendMessage("OCR_APPROVED", {});
+      setPendingOcr(null);
       triggerToast("Atajo Global: Aprobación Rápida OCR");
     });
 
@@ -165,7 +177,8 @@ export default function App() {
         document.activeElement?.tagName !== "TEXTAREA"
       ) {
         e.preventDefault();
-        sendMessage("APPROVE_OCR_DIALOG", {});
+        sendMessage("OCR_APPROVED", {});
+        setPendingOcr(null);
         triggerToast("Atajo Local: Aprobación Rápida OCR");
       }
     };
@@ -449,18 +462,28 @@ export default function App() {
   useEffect(() => {
     if (windowLabel !== "overlay") return;
 
-    const unlisten = listen<any>("ocr-update", (event) => {
-      setOcrData(event.payload);
-      
-      // Limpiar ocr después de 5 segundos de inactividad
+    const unlistenPending = listen<any>("ocr-pending-approval", (event) => {
+      setOcrData({ ...event.payload, approved: false });
+    });
+
+    const unlistenApproved = listen<any>("ocr-approved", () => {
+      setOcrData((prev: any) => {
+        if (prev) {
+          return { ...prev, approved: true };
+        }
+        return null;
+      });
+
+      // Borde verde durante 1.5 segundos antes de desvanecerse
       const timer = setTimeout(() => {
         setOcrData(null);
-      }, 5000);
+      }, 1500);
       return () => clearTimeout(timer);
     });
 
     return () => {
-      unlisten.then((f) => f());
+      unlistenPending.then((f) => f());
+      unlistenApproved.then((f) => f());
     };
   }, [windowLabel]);
 
@@ -601,7 +624,16 @@ export default function App() {
         break;
       }
 
-      case "OCR_DETECTION_UPDATE": {
+      case "OCR_PENDING_APPROVAL": {
+        const payload = lastMsg.payload;
+        if (payload) {
+          setPendingOcr(payload);
+          emit("ocr-pending-approval", payload).catch(console.error);
+        }
+        break;
+      }
+
+      case "OCR_APPROVED": {
         const payload = lastMsg.payload;
         if (payload) {
           const ocrMsg: ChatMessage = {
@@ -612,7 +644,8 @@ export default function App() {
             type: "info"
           };
           setChatMessages((prev) => [...prev, ocrMsg]);
-          emit("ocr-update", payload).catch(console.error);
+          setPendingOcr(null);
+          emit("ocr-approved", payload).catch(console.error);
         }
         break;
       }
@@ -627,6 +660,12 @@ export default function App() {
             timestamp: new Date().toISOString()
           };
           setChatMessages((prev) => [...prev, sttMsg]);
+
+          // Comprobar comando vocal asíncrono "Roco, lee" o "Aprobado"
+          const textClean = payload.text.toLowerCase().trim().replace(",", "").replace(".", "").replace("!", "");
+          if (textClean.includes("roco lee") || textClean.includes("aprobado")) {
+            handleApproveOcr();
+          }
         }
         break;
       }
@@ -1139,7 +1178,11 @@ export default function App() {
         )}
         {ocrData && ocrData.bbox && (
           <div
-            className="absolute border-2 border-emerald-500 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.4)] flex flex-col justify-end transition-all duration-200"
+            className={`absolute border-4 transition-all duration-200 ${
+              ocrData.approved
+                ? "border-emerald-400 shadow-[0_0_15px_rgba(16,185,129,0.6)]"
+                : "border-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.8)] animate-pulse rounded-md"
+            }`}
             style={{
               left: `${ocrData.bbox.x1 * 100}%`,
               top: `${ocrData.bbox.y1 * 100}%`,
@@ -1148,7 +1191,11 @@ export default function App() {
             }}
           >
             {ocrData.text_raw && (
-              <div className="absolute top-full left-0 mt-2 bg-slate-900/90 border border-emerald-500 px-3 py-1.5 rounded-lg text-xs text-emerald-400 font-mono max-w-xl shadow-[0_0_12px_rgba(16,185,129,0.2)] pointer-events-none animate-pulse">
+              <div className={`absolute top-full left-0 mt-2 bg-slate-900/90 border px-3 py-1.5 rounded-lg text-xs font-mono max-w-xl shadow-lg pointer-events-none ${
+                ocrData.approved
+                  ? "border-emerald-500 text-emerald-400"
+                  : "border-yellow-500 text-yellow-400 animate-pulse"
+              }`}>
                 {ocrData.avatar_detected ? `[Avatar: ${ocrData.avatar_hash}] ` : ""}
                 {ocrData.text_raw}
               </div>
@@ -1719,6 +1766,34 @@ export default function App() {
                         <span className="w-0.5 h-1.5 bg-gamer-neonGreen/60 rounded animate-[pulse_0.8s_infinite_500ms]" />
                       </div>
                     </div>
+                  </div>
+                </div>
+              )}
+
+              {pendingOcr && (
+                <div className="flex flex-col gap-2 p-3 bg-yellow-950/20 border border-yellow-500/30 rounded-xl my-2 mx-2 flex-none">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-mono font-bold text-yellow-400 flex items-center gap-1.5 animate-pulse">
+                      ⚠️ ESPERANDO APROBACIÓN DE DIÁLOGO
+                    </span>
+                    <span className="text-[8px] font-mono text-slate-500">Subtítulo Detectado</span>
+                  </div>
+                  <p className="text-xs font-mono text-slate-200 italic leading-relaxed border-l-2 border-yellow-500/50 pl-2">
+                    {pendingOcr.text_raw}
+                  </p>
+                  <div className="flex gap-2 justify-end mt-1.5">
+                    <button
+                      onClick={handleRejectOcr}
+                      className="bg-slate-900 border border-slate-700 hover:border-red-500/50 text-slate-400 hover:text-red-400 text-[9px] font-mono font-bold px-3 py-1 rounded transition-colors cursor-pointer"
+                    >
+                      IGNORAR
+                    </button>
+                    <button
+                      onClick={handleApproveOcr}
+                      className="bg-yellow-400 hover:bg-yellow-300 text-black text-[9px] font-mono font-bold px-3 py-1 rounded shadow-[0_0_10px_rgba(234,179,8,0.25)] hover:shadow-[0_0_15px_rgba(234,179,8,0.4)] transition-all cursor-pointer"
+                    >
+                      APROBAR Y LEER
+                    </button>
                   </div>
                 </div>
               )}

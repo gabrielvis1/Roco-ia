@@ -402,39 +402,17 @@ class WebSocketServer:
 
         # Inicializar el pipeline de visión de forma no bloqueante
         def on_ocr_update(ocr_payload: Dict[str, Any]) -> None:
-            # Enviar actualización a la UI para pintar el texto inmediatamente
+            # Enviar actualización a la UI indicando que está pendiente de aprobación manual
             asyncio.run_coroutine_threadsafe(
                 self._send_json(websocket, {
-                    "event": "OCR_DETECTION_UPDATE",
+                    "event": "OCR_PENDING_APPROVAL",
                     "timestamp": datetime.now().isoformat(),
                     "payload": ocr_payload
                 }),
                 loop
             )
 
-            # Cancelar cualquier tarea de voz pendiente
-            if self._pending_ocr_task and not self._pending_ocr_task.done():
-                loop.call_soon_threadsafe(self._pending_ocr_task.cancel)
-
             self._pending_ocr = ocr_payload
-
-            # Programar la reproducción de voz con retraso (filtro HUD de 3 segundos)
-            async def speak_after_delay(payload: Dict[str, Any]) -> None:
-                try:
-                    await asyncio.sleep(3.0)
-                    text = payload.get("text_raw")
-                    if text:
-                        avatar_h = payload.get("avatar_hash", "default")
-                        v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
-                        await self._tts.speak_async(text, voice_name=v_name)
-                    self._pending_ocr = None
-                except asyncio.CancelledError:
-                    pass
-
-            self._pending_ocr_task = asyncio.run_coroutine_threadsafe(
-                speak_after_delay(ocr_payload),
-                loop
-            )
 
         self._vision_pipeline = VisionPipeline(
             source_type=source_type,
@@ -765,22 +743,27 @@ class WebSocketServer:
         })
 
     async def _handle_approve_ocr(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
-        """Aprueba de forma inmediata la narración pendiente omitiendo el retraso del filtro HUD."""
+        """Recibe la aprobación de la UI, comienza la síntesis de voz en Kokoro/SAPI5 y notifica el éxito."""
         if self._pending_ocr:
             ocr_payload = self._pending_ocr
             self._pending_ocr = None
             
-            # Cancelar el delay task
-            if self._pending_ocr_task:
-                self._pending_ocr_task.cancel()
-                self._pending_ocr_task = None
-                
             text = ocr_payload.get("text_raw")
             if text:
-                self._logger.info(f"Aprobación de diálogo OCR forzada: '{text}'")
+                self._logger.info(f"Diálogo OCR aprobado y reproduciendo: '{text}'")
                 avatar_h = ocr_payload.get("avatar_hash", "default")
                 v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
+                # Ejecutar síntesis de voz asíncrona
                 asyncio.create_task(self._tts.speak_async(text, voice_name=v_name))
+                
+                # Sincronizar evento aprobado de forma bidireccional
+                await self.broadcast_to_all_async({
+                    "event": "OCR_APPROVED",
+                    "timestamp": datetime.now().isoformat(),
+                    "payload": {
+                        "text_raw": text
+                    }
+                })
 
     def _sync_db_settings(self, key: str, value: Any) -> None:
         """Sincroniza configuraciones cruzadas en la base de datos sqlite."""
