@@ -25,6 +25,8 @@ from .hardware import HardwareScanner
 from .utils import AsyncLogger
 from .vision import VisionPipeline
 from .audio import FasterWhisperSTT, KokoroTTS, AudioFSM, AudioState
+from .sandbox import GameSandbox
+from .brain import GeminiClient
 
 
 class WebSocketServer:
@@ -91,8 +93,19 @@ class WebSocketServer:
         self._audio_fsm = AudioFSM(
             stt_engine=self._stt,
             tts_engine=self._tts,
-            websocket_dispatcher=self.broadcast_audio_event
+            websocket_dispatcher=self.broadcast_audio_event,
+            switch_game_callback=self.on_switch_game_voice,
+            speech_callback=self.on_speech_processed
         )
+
+        # Capa de Inteligencia y Sandboxing de la Fase 5
+        self._active_sandbox: Optional[GameSandbox] = None
+        if self.active_game_profile:
+            self._active_sandbox = GameSandbox(self.active_game_profile)
+
+        # Cargar pool de claves de Gemini
+        keys_data = self._db.list_api_keys()
+        self._gemini_client = GeminiClient(keys_data, self._db)
 
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
@@ -453,6 +466,10 @@ class WebSocketServer:
         name = payload.get("name")
         if game_id and name:
             self._db.upsert_game_profile(game_id, name)
+            
+            # Ejecutar el Hot-Swap de base de datos relacional y vectorial
+            await self.switch_game_profile_context(websocket, game_id)
+            
             updated_profiles = self._db.get_game_profiles()
             await self._send_json(websocket, {
                 "event": "USER_SWITCH_GAME_ACK",
@@ -463,6 +480,254 @@ class WebSocketServer:
                     "profiles": updated_profiles
                 }
             })
+
+    async def switch_game_profile_context(self, websocket: ServerConnection, game_id: str) -> None:
+        """Cierra el sandbox anterior, limpia el chat e inicializa el nuevo sandbox en caliente."""
+        self._logger.info(f"Hot-Swap: Cambiando de perfil de juego a '{game_id}'")
+
+        if self._active_sandbox is not None:
+            self._active_sandbox.close()
+            self._active_sandbox = None
+
+        import gc
+        gc.collect()
+
+        self.active_game_profile = game_id
+        self._db.save_setting("active_game_profile", game_id)
+        if self._vision_pipeline:
+            self._vision_pipeline.active_profile = game_id
+
+        self._active_sandbox = GameSandbox(game_id)
+
+        # Enviar comando de limpieza de chat a la UI
+        await self._send_json(websocket, {
+            "event": "CLEAR_CHAT_HISTORY",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {}
+        })
+
+        # Repoblar el chat con el historial conversacional del nuevo sandbox (¡Súper premium!)
+        history = self._active_sandbox.get_conversation_history()
+        for msg in history:
+            is_user = msg["speaker"] == "user"
+            await self._send_json(websocket, {
+                "event": "USER_STT_UPDATE" if is_user else "OCR_DETECTION_UPDATE",
+                "timestamp": msg["timestamp"],
+                "payload": {
+                    "text": msg["text"],
+                    "text_raw": msg["text"],
+                    "state": "SLEEPING"
+                }
+            })
+
+    async def switch_game_profile_context_voice(self, game_id: str) -> None:
+        """Cambio de juego activado por voz de forma global."""
+        profiles = self._db.get_game_profiles()
+        p_name = next((p["name"] for p in profiles if p["game_id"] == game_id), game_id)
+        
+        if self._active_sandbox is not None:
+            self._active_sandbox.close()
+            self._active_sandbox = None
+
+        import gc
+        gc.collect()
+
+        self.active_game_profile = game_id
+        self._db.save_setting("active_game_profile", game_id)
+        if self._vision_pipeline:
+            self._vision_pipeline.active_profile = game_id
+
+        self._active_sandbox = GameSandbox(game_id)
+
+        # Enviar limpieza de chat global a todas las conexiones de UI
+        await self.broadcast_to_all_async({
+            "event": "CLEAR_CHAT_HISTORY",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {}
+        })
+        
+        # Enviar ack de cambio a la UI
+        await self.broadcast_to_all_async({
+            "event": "USER_SWITCH_GAME_ACK",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {
+                "status": "success",
+                "active_game_id": game_id,
+                "profiles": profiles
+            }
+        })
+
+        # Cargar historial
+        history = self._active_sandbox.get_conversation_history()
+        for msg in history:
+            is_user = msg["speaker"] == "user"
+            await self.broadcast_to_all_async({
+                "event": "USER_STT_UPDATE" if is_user else "OCR_DETECTION_UPDATE",
+                "timestamp": msg["timestamp"],
+                "payload": {
+                    "text": msg["text"],
+                    "text_raw": msg["text"],
+                    "state": "SLEEPING"
+                }
+            })
+        
+        # Narrar confirmación de voz
+        await self._tts.speak_async(f"Cambiado al perfil de juego {p_name}.")
+
+    async def broadcast_to_all_async(self, data: Dict[str, Any]) -> None:
+        """Envía un mensaje a todos los clientes WebSocket de manera asíncrona."""
+        for ws in list(self._connected_clients):
+            await self._send_json(ws, data)
+
+    def on_switch_game_voice(self, game_name: str) -> None:
+        """Busca y cambia de perfil de juego por comando de voz en caliente."""
+        profiles = self._db.get_game_profiles()
+        target_profile = None
+        for p in profiles:
+            if p["name"].lower().strip() in game_name.lower().strip() or game_name.lower().strip() in p["name"].lower().strip():
+                target_profile = p
+                break
+        
+        if target_profile:
+            profile_id = target_profile["game_id"]
+            if self.loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self.switch_game_profile_context_voice(profile_id),
+                    self.loop
+                )
+
+    def on_speech_processed(self, text: str) -> None:
+        """Enruta y procesa la entrada de voz transcrita del usuario."""
+        text_clean = text.lower().strip().replace(",", "").replace(".", "").replace("!", "")
+        
+        if "como paso esto" in text_clean or "cómo paso esto" in text_clean:
+            if self.loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self.process_multimodal_request(),
+                    self.loop
+                )
+        else:
+            if "hablemos de corrido" not in text_clean and "descansa" not in text_clean:
+                if self.loop is not None:
+                    asyncio.run_coroutine_threadsafe(
+                        self.handle_user_query(text),
+                        self.loop
+                    )
+
+    async def handle_user_query(self, user_text: str) -> None:
+        """Envía la consulta del usuario a Gemini y narra la respuesta."""
+        try:
+            system_prompt = (
+                "Eres Roco, un asistente cognitivo de IA para videojuegos. "
+                "Responde de forma concisa, útil y gamer a las preguntas del jugador."
+            )
+            
+            # Notificar que Roco está pensando
+            await self.broadcast_to_all_async({
+                "event": "OCR_DETECTION_UPDATE",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "text_raw": "Pensando...",
+                    "avatar_hash": "system",
+                    "avatar_detected": False
+                }
+            })
+            
+            # Invocar Gemini asíncronamente
+            response = await self._gemini_client.generate_content(system_prompt, user_text)
+            
+            # Guardar en Sandbox de base de datos
+            if self._active_sandbox:
+                self._active_sandbox.add_conversation("user", user_text)
+                self._active_sandbox.add_conversation("roco", response)
+            
+            # Enviar la respuesta de Roco a la UI
+            await self.broadcast_to_all_async({
+                "event": "OCR_DETECTION_UPDATE",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "text_raw": response,
+                    "avatar_hash": "roco",
+                    "avatar_detected": False
+                }
+            })
+            
+            # Hablar
+            await self._tts.speak_async(response)
+            
+        except Exception as e:
+            self._logger.error(f"Error procesando consulta con Gemini: {e}")
+            await self.broadcast_to_all_async({
+                "event": "SYSTEM_WARNING",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "message": "Error al conectar con Gemini o límite de cuota excedido."
+                }
+            })
+
+    async def process_multimodal_request(self) -> None:
+        """Toma el frame de pantalla actual, llama a Gemini Multimodal y narra la solución."""
+        try:
+            frame = self._vision_pipeline.last_frame if self._vision_pipeline else None
+            if frame is None:
+                err_msg = "No hay señal de video activa en este momento para analizar."
+                self._logger.warn(err_msg)
+                await self._tts.speak_async(err_msg)
+                return
+            
+            # Codificar a PNG en memoria
+            success, encoded_img = cv2.imencode(".png", frame)
+            if not success:
+                raise RuntimeError("Error al codificar el frame de video a PNG.")
+            
+            import base64
+            base64_data = base64.b64encode(encoded_img).decode("utf-8")
+            
+            # Notificar al frontend que el Cerebro de Roco está analizando
+            await self.broadcast_to_all_async({
+                "event": "OCR_DETECTION_UPDATE",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "text_raw": "Pensando... Analizando la pantalla...",
+                    "avatar_hash": "system",
+                    "avatar_detected": False
+                }
+            })
+            
+            # Invocar Gemini asíncronamente
+            explanation = await self._gemini_client.generate_multimodal(base64_data)
+            
+            # Registrar en la base de datos relacional de la sesión (Sandbox)
+            if self._active_sandbox:
+                self._active_sandbox.add_conversation("roco", explanation)
+                
+            # Broadcast la respuesta de Roco a la UI
+            await self.broadcast_to_all_async({
+                "event": "OCR_DETECTION_UPDATE",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "text_raw": explanation,
+                    "avatar_hash": "roco",
+                    "avatar_detected": False
+                }
+            })
+            
+            # Narrar de forma asíncrona no bloqueante
+            await self._tts.speak_async(explanation)
+            
+        except Exception as e:
+            self._logger.error(f"Fallo en el análisis multimodal: {e}")
+            await self.broadcast_to_all_async({
+                "event": "SYSTEM_WARNING",
+                "timestamp": datetime.now().isoformat(),
+                "payload": {
+                    "message": "Fallo de conexión o límites de API de Gemini excedidos. Verifique sus claves."
+                }
+            })
+
+    async def _handle_multimodal_help(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Inicia el análisis de la pantalla en caliente."""
+        asyncio.create_task(self.process_multimodal_request())
 
     def _sync_db_settings(self, key: str, value: Any) -> None:
         """Sincroniza configuraciones cruzadas en la base de datos sqlite."""
@@ -725,6 +990,7 @@ class WebSocketServer:
                 "SAVE_CAPTURE_SOURCE": self._handle_save_capture_source,
                 "DELETE_CAPTURE_SOURCE": self._handle_delete_capture_source,
                 "SAVE_GAME_ZONE": self._handle_save_game_zone,
+                "REQUEST_MULTIMODAL_HELP": self._handle_multimodal_help,
             }
 
             if event in handlers:
@@ -897,6 +1163,11 @@ class WebSocketServer:
                 await client.close()
             except Exception as e:
                 self._logger.error(f"Error al cerrar la conexión de cliente: {e}")
+
+        # Cerrar el sandbox activo
+        if self._active_sandbox is not None:
+            self._active_sandbox.close()
+            self._active_sandbox = None
 
         try:
             self._server.close()

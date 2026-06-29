@@ -603,6 +603,28 @@ export default function App() {
         break;
       }
 
+      case "CLEAR_CHAT_HISTORY": {
+        setChatMessages([]);
+        triggerToast("Historial de chat restablecido por cambio de contexto.");
+        break;
+      }
+
+      case "SYSTEM_WARNING": {
+        const payload = lastMsg.payload;
+        if (payload && payload.message) {
+          const warnMsg: ChatMessage = {
+            id: `warn_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            sender: "system",
+            text: `[ADVERTENCIA DEL SISTEMA] ${payload.message}`,
+            timestamp: new Date().toISOString(),
+            type: "error"
+          };
+          setChatMessages((prev) => [...prev, warnMsg]);
+          triggerToast(`Advertencia: ${payload.message}`);
+        }
+        break;
+      }
+
       case "SAVE_GAME_ZONE_ACK": {
         triggerToast("Límites de calibración (ROI) guardados con éxito.");
         addSystemChat("Zonas de juego de SQLite sincronizadas con éxito.", "success", lastMsg.payload);
@@ -1621,7 +1643,7 @@ export default function App() {
                 </button>
               </form>
 
-              <div className="grid grid-cols-3 gap-2">
+              <div className="grid grid-cols-4 gap-2">
                 <button
                   onClick={simulateVoiceInput}
                   className="bg-gamer-panel border border-gamer-neonGreen/20 hover:border-gamer-neonGreen/50 text-gamer-neonGreen text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
@@ -1635,6 +1657,12 @@ export default function App() {
                   className="bg-gamer-panel border border-gamer-neonYellow/20 hover:border-gamer-neonYellow/50 text-gamer-neonYellow text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
                 >
                   🤖 SIMULAR ROCO
+                </button>
+                <button
+                  onClick={() => sendMessage("REQUEST_MULTIMODAL_HELP", {})}
+                  className="bg-gamer-panel border border-sky-400/20 hover:border-sky-400/50 text-sky-400 text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
+                >
+                  👁️ ¿CÓMO PASO ESTO?
                 </button>
                 <button
                   onClick={() => {

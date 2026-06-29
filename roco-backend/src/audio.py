@@ -180,12 +180,16 @@ class AudioFSM:
         self,
         stt_engine: FasterWhisperSTT,
         tts_engine: KokoroTTS,
-        websocket_dispatcher: Callable[[str, Dict[str, Any]], None]
+        websocket_dispatcher: Callable[[str, Dict[str, Any]], None],
+        switch_game_callback: Optional[Callable[[str], None]] = None,
+        speech_callback: Optional[Callable[[str], None]] = None
     ) -> None:
         self.state = AudioState.SLEEPING
         self.stt = stt_engine
         self.tts = tts_engine
         self.dispatch = websocket_dispatcher
+        self.switch_game_callback = switch_game_callback
+        self.speech_callback = speech_callback
 
         # Wake Word detector
         self.wake_detector = RustpotterWakeWordDetector(
@@ -266,19 +270,34 @@ class AudioFSM:
 
                 text_clean = text.lower().strip().replace(",", "").replace(".", "").replace("!", "")
 
-                # Evaluar cambios de estado y comandos conversacionales
+                # 1. Comprobar comandos de cambio de juego por voz primero
+                if "cambia de juego a" in text_clean or "cambia a" in text_clean:
+                    parts = text_clean.split("cambia de juego a") if "cambia de juego a" in text_clean else text_clean.split("cambia a")
+                    if len(parts) > 1 and self.switch_game_callback:
+                        game_name = parts[1].strip()
+                        self.switch_game_callback(game_name)
+                        if self.state == AudioState.ACTIVE_ONE_SHOT:
+                            self.transition_to(AudioState.SLEEPING)
+                        return
+
+                # 2. Evaluar cambios de estado y comandos conversacionales
                 if self.state == AudioState.ACTIVE_ONE_SHOT:
                     if "hablemos de corrido" in text_clean:
                         self.transition_to(AudioState.CONTINUOUS_CONVERSATION)
-                        # Confirmar por voz
                         await self.tts.speak_async("Continuous conversation mode active.")
                     else:
-                        # Procesar un comando de un solo golpe
+                        # Consulta general a Roco
+                        if self.speech_callback:
+                            self.speech_callback(text)
                         self.transition_to(AudioState.SLEEPING)
                 elif self.state == AudioState.CONTINUOUS_CONVERSATION:
                     if "descansa" in text_clean:
                         self.transition_to(AudioState.SLEEPING)
                         await self.tts.speak_async("Resting now.")
+                    else:
+                        # Consulta en conversación continua
+                        if self.speech_callback:
+                            self.speech_callback(text)
 
         except Exception as e:
             logger.error(f"Fallo procesando flujo de habla: {e}")
