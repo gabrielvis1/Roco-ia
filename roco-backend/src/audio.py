@@ -172,6 +172,18 @@ class KokoroTTS:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(self.executor, self.speak, text, voice_name)
 
+    def stop(self) -> None:
+        """Detiene cualquier reproducción en curso de forma inmediata."""
+        try:
+            sd.stop()
+            if self.sapi_voice is not None:
+                self.sapi_voice.Speak("", 3)  # SVSFPurgeBeforeSpeak = 2 | SVSFlagsAsync = 1 -> Flag 3
+            if self.dispatch:
+                self.dispatch("TTS_VOLUME_UPDATE", {"volume": 0.0})
+            logger.info("TTS detenido a petición de silencio.")
+        except Exception as e:
+            logger.error(f"Error deteniendo TTS: {e}")
+
 
 class RustpotterWakeWordDetector:
     """Motor de detección de Wake Word local para las palabras clave: 'Roco' y 'Oye Roco!'."""
@@ -220,7 +232,8 @@ class AudioFSM:
         tts_engine: KokoroTTS,
         websocket_dispatcher: Callable[[str, Dict[str, Any]], None],
         switch_game_callback: Optional[Callable[[str], None]] = None,
-        speech_callback: Optional[Callable[[str], None]] = None
+        speech_callback: Optional[Callable[[str], None]] = None,
+        db_instance: Any = None
     ) -> None:
         self.state = AudioState.SLEEPING
         self.stt = stt_engine
@@ -228,6 +241,8 @@ class AudioFSM:
         self.dispatch = websocket_dispatcher
         self.switch_game_callback = switch_game_callback
         self.speech_callback = speech_callback
+        self._db = db_instance
+        
         # Asignar dispatcher de telemetría de volumen al TTS
         self.tts.dispatch = self.dispatch
 
@@ -236,6 +251,7 @@ class AudioFSM:
             stt_engine=self.stt,
             on_detect=self.handle_wake_word
         )
+        self.wake_detector.fsm = self
 
         # Buffers y variables de control de VAD
         self.voice_buffer: List[np.ndarray] = []
@@ -244,7 +260,7 @@ class AudioFSM:
         self._executor = ThreadPoolExecutor(max_workers=2)
 
     def handle_wake_word(self) -> None:
-        """Callback ejecutado al oír 'Roco' o 'Oye Roco!'."""
+        """Callback ejecutado al oír la palabra de activación configurada."""
         if self.state == AudioState.SLEEPING:
             self.transition_to(AudioState.ACTIVE_ONE_SHOT)
 
@@ -258,12 +274,29 @@ class AudioFSM:
         self.voice_buffer = []
         self._silence_start = None
 
-    def feed_audio(self, chunk: np.ndarray) -> None:
-        """Inyecta el fragmento de audio proveniente del micrófono.
+    def get_voice_words(self) -> Dict[str, str]:
+        if self._db:
+            wake = self._db.get_setting("voice_wake_word", "roco")
+            sleep = self._db.get_setting("voice_sleep_word", "descansa")
+            approve = self._db.get_setting("voice_approve_word", "aprobado")
+            return {
+                "wake": wake.lower().strip() if wake else "roco",
+                "sleep": sleep.lower().strip() if sleep else "descansa",
+                "approve": approve.lower().strip() if approve else "aprobado"
+            }
+        return {"wake": "roco", "sleep": "descansa", "approve": "aprobado"}
 
-        Args:
-            chunk: Datos de audio capturados a 16kHz float32.
-        """
+    def feed_audio(self, chunk: np.ndarray) -> None:
+        """Inyecta el fragmento de audio proveniente del micrófono."""
+        mic_mode = "always_on"
+        if self._db:
+            mic_mode = self._db.get_setting("microphone_mode", "always_on")
+
+        # En modo siempre activo (always_on), mantenemos la FSM en ACTIVE_ONE_SHOT de forma persistente
+        if mic_mode == "always_on" and self.state == AudioState.SLEEPING:
+            self.state = AudioState.ACTIVE_ONE_SHOT
+            self.dispatch("AUDIO_STATE_CHANGED", {"state": "ACTIVE_ONE_SHOT"})
+
         # En reposo, alimentamos el procesador de Wake Word
         if self.state == AudioState.SLEEPING:
             self.wake_detector.process_audio(chunk)
@@ -273,9 +306,16 @@ class AudioFSM:
         if self.state in (AudioState.ACTIVE_ONE_SHOT, AudioState.CONTINUOUS_CONVERSATION):
             self.voice_buffer.append(chunk)
 
-            # VAD por RMS (silencio prolongado > 1.2 segundos delimita el fin de la frase)
+            # VAD por RMS
             rms = np.sqrt(np.mean(chunk**2))
-            if rms < 0.008:
+            vad_thresh = 0.005
+            if self._db:
+                try:
+                    vad_thresh = float(self._db.get_setting("voice_vad_threshold", "0.005"))
+                except ValueError:
+                    pass
+
+            if rms < vad_thresh:
                 if self._silence_start is None:
                     self._silence_start = time.time()
                 elif time.time() - self._silence_start > 1.2:
@@ -309,29 +349,61 @@ class AudioFSM:
                 })
 
                 text_clean = text.lower().strip().replace(",", "").replace(".", "").replace("!", "")
+                words = self.get_voice_words()
+                wake_word = words["wake"]
+                sleep_word = words["sleep"]
+                approve_word = words["approve"]
+                mic_mode = "always_on"
+                if self._db:
+                    mic_mode = self._db.get_setting("microphone_mode", "always_on")
 
-                # 1. Comprobar comandos de cambio de juego por voz primero
+                # 1. Comprobar silencio inmediato por voz ("silencio", "cállate", "shh", "silenciar")
+                if any(x in text_clean for x in ["silencio", "cállate", "silenciar", "shh"]):
+                    logger.info("Comando de silencio detectado por voz. Deteniendo audio.")
+                    self.tts.stop()
+                    self.dispatch("VOICE_SILENCE_COMMAND", {})
+                    if self.state == AudioState.ACTIVE_ONE_SHOT and mic_mode != "always_on":
+                        self.transition_to(AudioState.SLEEPING)
+                    return
+
+                # 2. Comprobar comando de aprobación por voz ("aprobado", "roco lee", palabra configurada)
+                if approve_word in text_clean or "roco lee" in text_clean or "aprobado" in text_clean:
+                    logger.info("Aprobación de diálogo detectada por voz.")
+                    self.dispatch("VOICE_APPROVE_OCR", {})
+                    if self.state == AudioState.ACTIVE_ONE_SHOT and mic_mode != "always_on":
+                        self.transition_to(AudioState.SLEEPING)
+                    return
+
+                # 3. Comprobar comandos de cambio de juego por voz
                 if "cambia de juego a" in text_clean or "cambia a" in text_clean:
                     parts = text_clean.split("cambia de juego a") if "cambia de juego a" in text_clean else text_clean.split("cambia a")
                     if len(parts) > 1 and self.switch_game_callback:
                         game_name = parts[1].strip()
                         self.switch_game_callback(game_name)
-                        if self.state == AudioState.ACTIVE_ONE_SHOT:
+                        if self.state == AudioState.ACTIVE_ONE_SHOT and mic_mode != "always_on":
                             self.transition_to(AudioState.SLEEPING)
                         return
 
-                # 2. Evaluar cambios de estado y comandos conversacionales
+                # 4. Evaluar cambios de estado y comandos conversacionales
                 if self.state == AudioState.ACTIVE_ONE_SHOT:
                     if "hablemos de corrido" in text_clean:
                         self.transition_to(AudioState.CONTINUOUS_CONVERSATION)
                         await self.tts.speak_async("Continuous conversation mode active.")
                     else:
-                        # Consulta general a Roco
-                        if self.speech_callback:
-                            self.speech_callback(text)
-                        self.transition_to(AudioState.SLEEPING)
+                        if sleep_word in text_clean and mic_mode != "always_on":
+                            self.transition_to(AudioState.SLEEPING)
+                            await self.tts.speak_async("Resting now.")
+                        else:
+                            # Consulta general a Roco
+                            if self.speech_callback:
+                                self.speech_callback(text)
+                            if mic_mode != "always_on":
+                                self.transition_to(AudioState.SLEEPING)
+                            else:
+                                self.voice_buffer = []
+                                self._silence_start = None
                 elif self.state == AudioState.CONTINUOUS_CONVERSATION:
-                    if "descansa" in text_clean:
+                    if sleep_word in text_clean:
                         self.transition_to(AudioState.SLEEPING)
                         await self.tts.speak_async("Resting now.")
                     else:

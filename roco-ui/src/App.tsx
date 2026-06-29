@@ -116,6 +116,12 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [isRocoSpeaking, setIsRocoSpeaking] = useState<boolean>(false);
   const [pendingOcr, setPendingOcr] = useState<any>(null);
+  
+  // Palabra de activación y modos de micrófono
+  const [voiceWakeWord, setVoiceWakeWord] = useState<string>("roco");
+  const [voiceSleepWord, setVoiceSleepWord] = useState<string>("descansa");
+  const [voiceApproveWord, setVoiceApproveWord] = useState<string>("aprobado");
+  const [microphoneMode, setMicrophoneMode] = useState<string>("always_on");
 
   // Referencias para el Vúmetro
   const vuCanvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -687,6 +693,12 @@ export default function App() {
         break;
       }
 
+      case "VOICE_SILENCE_COMMAND": {
+        setPendingOcr(null);
+        triggerToast("Roco Silenciado por Voz");
+        break;
+      }
+
       case "SYSTEM_WARNING": {
         const payload = lastMsg.payload;
         if (payload && payload.message) {
@@ -1078,27 +1090,7 @@ export default function App() {
     }, 1200);
   };
 
-  const simulateVoiceInput = () => {
-    const userPhrases = [
-      "Roco, haz un clip de los últimos 30 segundos y publícalo en Discord.",
-      "Roco, ¿cuál es la debilidad elemental de este jefe?",
-      "Roco, activa el filtro de reducción de ruido en el micrófono.",
-      "Roco, lee la descripción del objeto seleccionado en el inventario.",
-      "Roco, guarda este punto de control en Elden Ring.",
-    ];
-    const phrase = userPhrases[Math.floor(Math.random() * userPhrases.length)];
-    const newMsg: ChatMessage = {
-      id: `sim-user-${Date.now()}`,
-      sender: "user",
-      text: phrase,
-      timestamp: new Date().toISOString(),
-    };
-    setChatMessages((prev) => [...prev, newMsg]);
 
-    setTimeout(() => {
-      simulateRocoResponse(phrase);
-    }, 1500);
-  };
 
   const simulateRocoResponse = (userPhrase: string) => {
     let reply = "Entendido. Procesando comando de voz asíncrono...";
@@ -1304,6 +1296,22 @@ export default function App() {
 
             {/* Marco de visualización (16:9) */}
             <div ref={containerRef} className="flex-none aspect-video w-full bg-slate-900 rounded-lg border border-slate-800 relative overflow-hidden flex flex-col items-center justify-center">
+              {/* Caja delimitadora en vivo para el texto que va a ser leído */}
+              {pendingOcr && pendingOcr.bbox && (
+                <div
+                  className="absolute border-4 border-yellow-400 shadow-[0_0_15px_rgba(234,179,8,0.8)] animate-pulse rounded-md bg-yellow-400/5 z-20 pointer-events-none"
+                  style={{
+                    left: `${pendingOcr.bbox.x1 * 100}%`,
+                    top: `${pendingOcr.bbox.y1 * 100}%`,
+                    width: `${(pendingOcr.bbox.x2 - pendingOcr.bbox.x1) * 100}%`,
+                    height: `${(pendingOcr.bbox.y2 - pendingOcr.bbox.y1) * 100}%`,
+                  }}
+                >
+                  <span className="absolute bottom-full left-0 mb-1 text-[8px] font-mono font-bold text-yellow-400 bg-slate-950/85 px-1.5 py-0.5 border border-yellow-400/30 rounded shadow">
+                    PENDIENTE LEER
+                  </span>
+                </div>
+              )}
               {isCalibrating && (
                 <div
                   className="absolute inset-0 z-30 cursor-crosshair bg-black/40 select-none"
@@ -1658,6 +1666,74 @@ export default function App() {
                   <option value="pt">Portugués (PT)</option>
                 </select>
               </div>
+
+              {/* Modo de Micrófono */}
+              <div className="col-span-2">
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  MODO DE MICRÓFONO
+                </label>
+                <select
+                  value={microphoneMode}
+                  onChange={(e) => {
+                    setMicrophoneMode(e.target.value);
+                    handleSaveSetting("microphone_mode", e.target.value);
+                    triggerToast(`Modo micrófono cambiado: ${e.target.value}`);
+                  }}
+                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono cursor-pointer"
+                >
+                  <option value="always_on">Siempre Escuchando (Micrófono Abierto)</option>
+                  <option value="wake_word">Modo Wake Word (Roco)</option>
+                  <option value="push_to_talk">Manual / Pulsar</option>
+                </select>
+              </div>
+
+              {/* Palabra de Activación */}
+              <div>
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  PALABRA ACTIVACIÓN (WAKE)
+                </label>
+                <input
+                  type="text"
+                  value={voiceWakeWord}
+                  onChange={(e) => {
+                    setVoiceWakeWord(e.target.value);
+                    handleSaveSetting("voice_wake_word", e.target.value);
+                  }}
+                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono"
+                />
+              </div>
+
+              {/* Palabra de Desactivación */}
+              <div>
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  PALABRA DESACTIVACIÓN (SLEEP)
+                </label>
+                <input
+                  type="text"
+                  value={voiceSleepWord}
+                  onChange={(e) => {
+                    setVoiceSleepWord(e.target.value);
+                    handleSaveSetting("voice_sleep_word", e.target.value);
+                  }}
+                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono"
+                />
+              </div>
+
+              {/* Palabra de Aprobación */}
+              <div className="col-span-2">
+                <label className="block text-[8px] text-slate-500 font-bold uppercase mb-1 font-mono">
+                  PALABRA DE APROBACIÓN DE TEXTO
+                </label>
+                <input
+                  type="text"
+                  value={voiceApproveWord}
+                  onChange={(e) => {
+                    setVoiceApproveWord(e.target.value);
+                    handleSaveSetting("voice_approve_word", e.target.value);
+                  }}
+                  className="w-full bg-gamer-dark border border-gamer-border p-2 rounded text-slate-200 text-xs focus:outline-none focus:border-gamer-neonGreen font-mono"
+                />
+              </div>
             </div>
           </div>
 
@@ -1817,35 +1893,15 @@ export default function App() {
                 </button>
               </form>
 
-              <div className="grid grid-cols-4 gap-2">
-                <button
-                  onClick={simulateVoiceInput}
-                  className="bg-gamer-panel border border-gamer-neonGreen/20 hover:border-gamer-neonGreen/50 text-gamer-neonGreen text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  🎤 SIMULAR VOZ
-                </button>
-                <button
-                  onClick={() =>
-                    simulateRocoResponse("Roco, ¿cuál es la debilidad elemental de este jefe?")
-                  }
-                  className="bg-gamer-panel border border-gamer-neonYellow/20 hover:border-gamer-neonYellow/50 text-gamer-neonYellow text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  🤖 SIMULAR ROCO
-                </button>
-                <button
-                  onClick={() => sendMessage("REQUEST_MULTIMODAL_HELP", {})}
-                  className="bg-gamer-panel border border-sky-400/20 hover:border-sky-400/50 text-sky-400 text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
-                >
-                  👁️ ¿CÓMO PASO ESTO?
-                </button>
+              <div className="flex gap-2 justify-end">
                 <button
                   onClick={() => {
                     setChatMessages([]);
                     clearMessages();
                   }}
-                  className="bg-gamer-panel border border-red-500/20 hover:border-red-500/40 text-red-400 text-[9px] font-mono font-bold py-1.5 rounded-lg transition-all cursor-pointer"
+                  className="w-full bg-gamer-panel border border-red-500/20 hover:border-red-500/40 text-red-400 text-[9px] font-mono font-bold py-2.5 rounded-lg transition-all cursor-pointer text-center uppercase tracking-wider"
                 >
-                  🗑️ LIMPIAR TODO
+                  🗑️ LIMPIAR HISTORIAL DE CHAT
                 </button>
               </div>
             </div>

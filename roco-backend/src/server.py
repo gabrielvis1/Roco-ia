@@ -95,7 +95,8 @@ class WebSocketServer:
             tts_engine=self._tts,
             websocket_dispatcher=self.broadcast_audio_event,
             switch_game_callback=self.on_switch_game_voice,
-            speech_callback=self.on_speech_processed
+            speech_callback=self.on_speech_processed,
+            db_instance=self._db
         )
 
         # Capa de Inteligencia y Sandboxing de la Fase 5
@@ -110,6 +111,8 @@ class WebSocketServer:
         # Variables para la aprobación y cola de diálogos OCR de la Fase 6
         self._pending_ocr: Optional[Dict[str, Any]] = None
         self._pending_ocr_task: Optional[Any] = None
+        self._approved_ocr_counts: Dict[str, int] = {}
+        self._silence_auto_read: bool = False
 
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
@@ -144,6 +147,33 @@ class WebSocketServer:
 
     def broadcast_audio_event(self, event: str, payload: Dict[str, Any]) -> None:
         """Transmite un evento estructurado de audio a todos los clientes WebSocket."""
+        # Interceptar comandos de voz del backend
+        if event == "VOICE_APPROVE_OCR":
+            self._logger.info("Interceptado VOICE_APPROVE_OCR desde la FSM de Audio. Aprobando diálogo...")
+            if self.loop is not None:
+                asyncio.run_coroutine_threadsafe(
+                    self._handle_approve_ocr(None, {}),
+                    self.loop
+                )
+            return
+
+        if event == "VOICE_SILENCE_COMMAND":
+            self._logger.info("Interceptado VOICE_SILENCE_COMMAND desde la FSM de Audio. Silenciando...")
+            self._silence_auto_read = True
+            self._pending_ocr = None
+            # Despachar también al frontend para sincronización de UI
+            if self.loop is not None:
+                for ws in list(self._connected_clients):
+                    asyncio.run_coroutine_threadsafe(
+                        self._send_json(ws, {
+                            "event": "VOICE_SILENCE_COMMAND",
+                            "timestamp": datetime.now().isoformat(),
+                            "payload": {}
+                        }),
+                        self.loop
+                    )
+            return
+
         if self.loop is not None:
             for ws in list(self._connected_clients):
                 asyncio.run_coroutine_threadsafe(
@@ -164,7 +194,6 @@ class WebSocketServer:
             websocket: Conexión activa del cliente.
         """
         try:
-            # Obtener datos guardados de la base de datos
             settings = {
                 "active_game_profile": self._db.get_setting("active_game_profile", "default"),
                 "output_language": self._db.get_setting("output_language", "es"),
@@ -177,6 +206,10 @@ class WebSocketServer:
                 "active_mic": self._db.get_setting("microphone_device_id", "default"),
                 "preview_width": self._db.get_setting("preview_width", "480"),
                 "preview_jpeg_quality": self._db.get_setting("preview_jpeg_quality", "50"),
+                "voice_wake_word": self._db.get_setting("voice_wake_word", "roco"),
+                "voice_sleep_word": self._db.get_setting("voice_sleep_word", "descansa"),
+                "voice_approve_word": self._db.get_setting("voice_approve_word", "aprobado"),
+                "microphone_mode": self._db.get_setting("microphone_mode", "always_on"),
             }
             profiles = self._db.get_game_profiles()
             api_keys = self._db.list_api_keys()
@@ -402,6 +435,35 @@ class WebSocketServer:
 
         # Inicializar el pipeline de visión de forma no bloqueante
         def on_ocr_update(ocr_payload: Dict[str, Any]) -> None:
+            text = ocr_payload.get("text_raw", "").strip()
+            if not text:
+                return
+
+            # Comprobar si el texto ya fue aprobado varias veces
+            approval_count = self._approved_ocr_counts.get(text, 0)
+            if approval_count >= 2 and not self._silence_auto_read:
+                self._logger.info(f"Diálogo auto-aprobado por frecuencia ({approval_count} aprobaciones): '{text}'")
+                
+                # Reproducción inmediata de voz
+                avatar_h = ocr_payload.get("avatar_hash", "default")
+                v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
+                # Detener reproducción previa antes de auto-leer
+                self._tts.stop()
+                self._tts.speak(text, voice_name=v_name)
+                
+                # Sincronizar evento aprobado con la UI
+                asyncio.run_coroutine_threadsafe(
+                    self.broadcast_to_all_async({
+                        "event": "OCR_APPROVED",
+                        "timestamp": datetime.now().isoformat(),
+                        "payload": {
+                            "text_raw": text
+                        }
+                    }),
+                    loop
+                )
+                return
+
             # Enviar actualización a la UI indicando que está pendiente de aprobación manual
             asyncio.run_coroutine_threadsafe(
                 self._send_json(websocket, {
@@ -750,9 +812,18 @@ class WebSocketServer:
             
             text = ocr_payload.get("text_raw")
             if text:
-                self._logger.info(f"Diálogo OCR aprobado y reproduciendo: '{text}'")
+                text_strip = text.strip()
+                # Incrementar el contador de aprobaciones para el texto
+                self._approved_ocr_counts[text_strip] = self._approved_ocr_counts.get(text_strip, 0) + 1
+                # Habilitar auto-lectura nuevamente tras una aprobación explícita
+                self._silence_auto_read = False
+                
+                self._logger.info(f"Diálogo OCR aprobado y reproduciendo: '{text}' (Historial de Aprobación: {self._approved_ocr_counts[text_strip]})")
+                
                 avatar_h = ocr_payload.get("avatar_hash", "default")
                 v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
+                # Detener reproducción previa
+                self._tts.stop()
                 # Ejecutar síntesis de voz asíncrona
                 asyncio.create_task(self._tts.speak_async(text, voice_name=v_name))
                 
@@ -1133,8 +1204,9 @@ class WebSocketServer:
 
             def callback(indata: Any, frames: Any, time: Any, status: Any) -> None:
                 if indata is not None:
-                    # Copiar canal mono float32 para inyectar en la FSM
-                    audio_chunk = indata[:, 0].copy()
+                    # Copiar canal mono float32 y aplicar factor de ganancia
+                    gain_factor = float(self.microphone_gain) / 100.0
+                    audio_chunk = indata[:, 0].copy() * gain_factor
                     self._audio_fsm.feed_audio(audio_chunk)
 
             self._mic_stream = sd.InputStream(
