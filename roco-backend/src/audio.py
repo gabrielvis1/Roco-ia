@@ -1,3 +1,4 @@
+import random
 """Módulo de procesamiento de audio en tiempo real para Roco.
 
 Contiene la máquina de estados de audio (AudioFSM), el detector de Wake Word
@@ -82,6 +83,7 @@ class KokoroTTS:
         self.kokoro: Optional[Any] = None
         self.sapi_voice: Optional[Any] = None
         self.executor = ThreadPoolExecutor(max_workers=1)
+        self.dispatch: Optional[Callable[[str, Dict[str, Any]], None]] = None
 
         # 1. Intentar cargar Kokoro-ONNX
         if Kokoro is not None:
@@ -112,17 +114,53 @@ class KokoroTTS:
         }
 
     def speak(self, text: str, voice_name: str = "af_sarah") -> None:
-        """Sintetiza y reproduce el texto de forma síncrona. Ejecutar en Executor thread."""
+        """Sintetiza y reproduce el texto de forma síncrona con telemetría de volumen en tiempo real."""
         try:
-            # Si el modelo Kokoro está activo, sintetiza audio PCM y reproduce vía sounddevice
             if self.kokoro is not None:
                 samples, sample_rate = self.kokoro.create(text, voice=voice_name, speed=1.0, lang="en-us")
+                # Reproducir usando sounddevice de forma no bloqueante inicial
                 sd.play(samples, sample_rate)
+                
+                # Transmitir volumen RMS dinámicamente cada 50ms durante la duración del audio
+                total_samples = len(samples)
+                chunk_duration = 0.05  # 50ms
+                chunk_samples = int(sample_rate * chunk_duration)
+                
+                start_time = time.time()
+                play_duration = total_samples / sample_rate
+                
+                while time.time() - start_time < play_duration:
+                    elapsed = time.time() - start_time
+                    current_sample_idx = int(elapsed * sample_rate)
+                    chunk = samples[current_sample_idx : current_sample_idx + chunk_samples]
+                    if len(chunk) > 0:
+                        rms = float(np.sqrt(np.mean(chunk**2)))
+                        db = 20 * np.log10(rms + 1e-5)
+                        vol_norm = float(max(0.0, min(100.0, (db + 60) * 1.67)))
+                        if self.dispatch:
+                            self.dispatch("TTS_VOLUME_UPDATE", {"volume": vol_norm})
+                    time.sleep(chunk_duration)
+                
+                # Restablecer volumen a 0
+                if self.dispatch:
+                    self.dispatch("TTS_VOLUME_UPDATE", {"volume": 0.0})
                 sd.wait()
                 logger.info(f"TTS Kokoro reproducido: '{text}' usando voz '{voice_name}'")
-            # De lo contrario, cae en la voz nativa de Windows (SAPI5)
+
             elif self.sapi_voice is not None:
-                self.sapi_voice.Speak(text)
+                # SVSFlagsAsync = 1
+                self.sapi_voice.Speak(text, 1)
+                
+                # Medir estado de voz y oscilar el vúmetro
+                while self.sapi_voice.Status.RunningState == 2:
+                    vol_norm = float(random.randint(35, 75))
+                    if self.dispatch:
+                        self.dispatch("TTS_VOLUME_UPDATE", {"volume": vol_norm})
+                    time.sleep(0.05)
+                
+                # Restablecer volumen a 0
+                if self.dispatch:
+                    self.dispatch("TTS_VOLUME_UPDATE", {"volume": 0.0})
                 logger.info(f"TTS SAPI5 reproducido: '{text}'")
             else:
                 logger.warning(f"No hay motor TTS activo para reproducir: '{text}'")
@@ -190,6 +228,8 @@ class AudioFSM:
         self.dispatch = websocket_dispatcher
         self.switch_game_callback = switch_game_callback
         self.speech_callback = speech_callback
+        # Asignar dispatcher de telemetría de volumen al TTS
+        self.tts.dispatch = self.dispatch
 
         # Wake Word detector
         self.wake_detector = RustpotterWakeWordDetector(

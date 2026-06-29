@@ -3,6 +3,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager, WebviewWindow, WindowEvent,
 };
+use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 /// Comando de Tauri para cambiar dinámicamente el comportamiento de clics de la ventana.
 /// Si `passive` es verdadero, la ventana ignorará todos los eventos del cursor (click-through).
@@ -62,8 +63,47 @@ fn set_tray_audio_state(app: tauri::AppHandle, state: String) -> Result<(), Stri
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, shortcut, event| {
+                    if event.state() == ShortcutState::Pressed {
+                        let shortcut_m = Shortcut::new(
+                            Some(Modifiers::CONTROL | Modifiers::ALT),
+                            Code::KeyM,
+                        );
+                        let shortcut_a = Shortcut::new(
+                            Some(Modifiers::CONTROL | Modifiers::ALT),
+                            Code::KeyA,
+                        );
+
+                        if shortcut == &shortcut_m {
+                            let _ = app.emit("hotkey_toggle_mic", ());
+                        } else if shortcut == &shortcut_a {
+                            let _ = app.emit("hotkey_approve_ocr", ());
+                        }
+                    }
+                })
+                .build(),
+        )
         .invoke_handler(tauri::generate_handler![set_hud_mode, update_quick_profiles, set_hud_click_through, set_tray_audio_state])
         .setup(|app| {
+            // Registrar atajos globales
+            let shortcut_m = Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::ALT),
+                Code::KeyM,
+            );
+            let shortcut_a = Shortcut::new(
+                Some(Modifiers::CONTROL | Modifiers::ALT),
+                Code::KeyA,
+            );
+
+            if let Err(e) = app.global_shortcut().register(shortcut_m) {
+                eprintln!("Fallo al registrar hotkey CTRL+ALT+M: {:?}", e);
+            }
+            if let Err(e) = app.global_shortcut().register(shortcut_a) {
+                eprintln!("Fallo al registrar hotkey CTRL+ALT+A: {:?}", e);
+            }
+
             // Inicializar menú contextual nativo base
             let show = MenuItem::with_id(app, "show", "Abrir Panel", true, None::<&str>)?;
             let mic = CheckMenuItem::with_id(app, "mic", "Activar Micrófono", true, false, None::<&str>)?;

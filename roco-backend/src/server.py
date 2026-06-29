@@ -107,6 +107,10 @@ class WebSocketServer:
         keys_data = self._db.list_api_keys()
         self._gemini_client = GeminiClient(keys_data, self._db)
 
+        # Variables para la aprobación y cola de diálogos OCR de la Fase 6
+        self._pending_ocr: Optional[Dict[str, Any]] = None
+        self._pending_ocr_task: Optional[Any] = None
+
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
 
@@ -398,6 +402,7 @@ class WebSocketServer:
 
         # Inicializar el pipeline de visión de forma no bloqueante
         def on_ocr_update(ocr_payload: Dict[str, Any]) -> None:
+            # Enviar actualización a la UI para pintar el texto inmediatamente
             asyncio.run_coroutine_threadsafe(
                 self._send_json(websocket, {
                     "event": "OCR_DETECTION_UPDATE",
@@ -407,15 +412,29 @@ class WebSocketServer:
                 loop
             )
 
-            # Generación de voz local con Kokoro-82M (TTS)
-            text_to_speak = ocr_payload.get("text_raw")
-            if text_to_speak:
-                avatar_hash = ocr_payload.get("avatar_hash", "default")
-                voice_name = self._tts.avatar_voice_mapping.get(avatar_hash, "af_sarah")
-                asyncio.run_coroutine_threadsafe(
-                    self._tts.speak_async(text_to_speak, voice_name=voice_name),
-                    loop
-                )
+            # Cancelar cualquier tarea de voz pendiente
+            if self._pending_ocr_task and not self._pending_ocr_task.done():
+                loop.call_soon_threadsafe(self._pending_ocr_task.cancel)
+
+            self._pending_ocr = ocr_payload
+
+            # Programar la reproducción de voz con retraso (filtro HUD de 3 segundos)
+            async def speak_after_delay(payload: Dict[str, Any]) -> None:
+                try:
+                    await asyncio.sleep(3.0)
+                    text = payload.get("text_raw")
+                    if text:
+                        avatar_h = payload.get("avatar_hash", "default")
+                        v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
+                        await self._tts.speak_async(text, voice_name=v_name)
+                    self._pending_ocr = None
+                except asyncio.CancelledError:
+                    pass
+
+            self._pending_ocr_task = asyncio.run_coroutine_threadsafe(
+                speak_after_delay(ocr_payload),
+                loop
+            )
 
         self._vision_pipeline = VisionPipeline(
             source_type=source_type,
@@ -729,6 +748,40 @@ class WebSocketServer:
         """Inicia el análisis de la pantalla en caliente."""
         asyncio.create_task(self.process_multimodal_request())
 
+    async def _handle_toggle_microphone(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Alterna el estado de activación del micrófono en caliente."""
+        current_active = self._db.get_setting("microphone_active", "1")
+        next_active = "0" if current_active in ("1", "true", "True", True) else "1"
+        self._db.save_setting("microphone_active", next_active)
+        self.microphone_active = (next_active == "1")
+        self._start_mic_listener()
+        
+        await self.broadcast_to_all_async({
+            "event": "MICROPHONE_STATE_CHANGED",
+            "timestamp": datetime.now().isoformat(),
+            "payload": {
+                "active": self.microphone_active
+            }
+        })
+
+    async def _handle_approve_ocr(self, websocket: ServerConnection, payload: Dict[str, Any]) -> None:
+        """Aprueba de forma inmediata la narración pendiente omitiendo el retraso del filtro HUD."""
+        if self._pending_ocr:
+            ocr_payload = self._pending_ocr
+            self._pending_ocr = None
+            
+            # Cancelar el delay task
+            if self._pending_ocr_task:
+                self._pending_ocr_task.cancel()
+                self._pending_ocr_task = None
+                
+            text = ocr_payload.get("text_raw")
+            if text:
+                self._logger.info(f"Aprobación de diálogo OCR forzada: '{text}'")
+                avatar_h = ocr_payload.get("avatar_hash", "default")
+                v_name = self._tts.avatar_voice_mapping.get(avatar_h, "af_sarah")
+                asyncio.create_task(self._tts.speak_async(text, voice_name=v_name))
+
     def _sync_db_settings(self, key: str, value: Any) -> None:
         """Sincroniza configuraciones cruzadas en la base de datos sqlite."""
         if key == "active_mic":
@@ -991,6 +1044,8 @@ class WebSocketServer:
                 "DELETE_CAPTURE_SOURCE": self._handle_delete_capture_source,
                 "SAVE_GAME_ZONE": self._handle_save_game_zone,
                 "REQUEST_MULTIMODAL_HELP": self._handle_multimodal_help,
+                "TOGGLE_MICROPHONE": self._handle_toggle_microphone,
+                "APPROVE_OCR_DIALOG": self._handle_approve_ocr,
             }
 
             if event in handlers:

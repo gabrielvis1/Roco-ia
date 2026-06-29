@@ -114,9 +114,11 @@ export default function App() {
 
   // Notificación Toast
   const [toast, setToast] = useState<string | null>(null);
+  const [isRocoSpeaking, setIsRocoSpeaking] = useState<boolean>(false);
 
   // Referencias para el Vúmetro
   const vuCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const ttsVuCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const pipVuCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
@@ -140,6 +142,42 @@ export default function App() {
       setToast(null);
     }, 4000);
   };
+
+  // Escuchar atajos nativos de teclado globales y locales de la Fase 6
+  useEffect(() => {
+    // 1. Alternar Micrófono (CTRL+ALT+M)
+    const unlistenToggleMic = listen("hotkey_toggle_mic", () => {
+      sendMessage("TOGGLE_MICROPHONE", {});
+      triggerToast("Atajo Global: Alternando Micrófono");
+    });
+
+    // 2. Aprobación Rápida de OCR (CTRL+ALT+A)
+    const unlistenApproveOcr = listen("hotkey_approve_ocr", () => {
+      sendMessage("APPROVE_OCR_DIALOG", {});
+      triggerToast("Atajo Global: Aprobación Rápida OCR");
+    });
+
+    // 3. Aprobación Local mediante tecla SPACE (solo cuando no se escribe en inputs)
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (
+        e.code === "Space" &&
+        document.activeElement?.tagName !== "INPUT" &&
+        document.activeElement?.tagName !== "TEXTAREA"
+      ) {
+        e.preventDefault();
+        sendMessage("APPROVE_OCR_DIALOG", {});
+        triggerToast("Atajo Local: Aprobación Rápida OCR");
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      unlistenToggleMic.then((fn) => fn());
+      unlistenApproveOcr.then((fn) => fn());
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [sendMessage]);
 
   const toggleLogExpand = (id: string) => {
     setExpandedLogIds((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -386,6 +424,7 @@ export default function App() {
       };
       cleanCanvas(vuCanvasRef.current);
       cleanCanvas(pipVuCanvasRef.current);
+      cleanCanvas(ttsVuCanvasRef.current);
     }
 
     return () => {
@@ -621,6 +660,27 @@ export default function App() {
           };
           setChatMessages((prev) => [...prev, warnMsg]);
           triggerToast(`Advertencia: ${payload.message}`);
+        }
+        break;
+      }
+
+      case "MICROPHONE_STATE_CHANGED": {
+        const payload = lastMsg.payload;
+        if (payload) {
+          setIsMicActive(payload.active);
+          triggerToast(`Micrófono ${payload.active ? "activado" : "silenciado"}`);
+        }
+        break;
+      }
+
+      case "TTS_VOLUME_UPDATE": {
+        const payload = lastMsg.payload;
+        if (payload && typeof payload.volume === "number") {
+          const volNorm = payload.volume / 100;
+          if (ttsVuCanvasRef.current) {
+            drawVuMeterOnCanvas(ttsVuCanvasRef.current, volNorm);
+          }
+          setIsRocoSpeaking(payload.volume > 0);
         }
         break;
       }
@@ -1417,9 +1477,7 @@ export default function App() {
                 </h2>
                 <button
                   onClick={() => {
-                    const nextState = !isMicActive;
-                    setIsMicActive(nextState);
-                    handleSaveSetting("microphone_active", nextState ? 1 : 0);
+                    sendMessage("TOGGLE_MICROPHONE", {});
                   }}
                   className={`text-[9px] font-mono font-bold px-2 py-0.5 border rounded cursor-pointer transition-all ${
                     isMicActive
@@ -1436,12 +1494,28 @@ export default function App() {
                 {/* Vúmetro Canvas Vertical */}
                 <div className="flex flex-col items-center gap-1.5 h-full">
                   <div className="flex gap-1.5 items-stretch h-[140px]">
-                    <canvas
-                      ref={vuCanvasRef}
-                      width={18}
-                      height={140}
-                      className="w-4.5 h-full bg-gamer-dark rounded border border-gamer-border/60"
-                    />
+                    {/* Canal 1: Entrada (Micrófono) */}
+                    <div className="flex flex-col items-center gap-1">
+                      <canvas
+                        ref={vuCanvasRef}
+                        width={18}
+                        height={140}
+                        className="w-4.5 h-full bg-gamer-dark rounded border border-gamer-border/60"
+                      />
+                      <span className="text-[7px] text-slate-550 font-mono font-bold uppercase">Mic</span>
+                    </div>
+
+                    {/* Canal 2: Salida (Roco TTS) */}
+                    <div className="flex flex-col items-center gap-1">
+                      <canvas
+                        ref={ttsVuCanvasRef}
+                        width={18}
+                        height={140}
+                        className="w-4.5 h-full bg-gamer-dark rounded border border-gamer-border/60"
+                      />
+                      <span className="text-[7px] text-slate-550 font-mono font-bold uppercase">Roco</span>
+                    </div>
+
                     <div className="flex flex-col justify-between text-[7px] text-slate-600 font-mono py-0.5 leading-none">
                       <span>0dB</span>
                       <span>-9dB</span>
@@ -1555,7 +1629,7 @@ export default function App() {
                   Esperando flujo de eventos o interacción de voz...
                 </div>
               ) : (
-                chatMessages.map((msg) => {
+                chatMessages.map((msg, index, arr) => {
                   if (msg.sender === "system") {
                     const isExpanded = !!expandedLogIds[msg.id];
                     let bannerStyle = "bg-sky-950/30 border-sky-500/30 text-sky-400";
@@ -1605,6 +1679,11 @@ export default function App() {
                           }`}
                         >
                           <span>{isUser ? "🎤 USER VOICE" : "🤖 ROCO IA"}</span>
+                          {!isUser && index === arr.length - 1 && isRocoSpeaking && (
+                            <span className="text-gamer-neonGreen animate-pulse font-bold flex items-center gap-1 ml-1">
+                              🔊 <span className="text-[7px]">SINTETIZANDO VOZ...</span>
+                            </span>
+                          )}
                           <span>•</span>
                           <span>{new Date(msg.timestamp).toLocaleTimeString()}</span>
                         </div>
@@ -1622,6 +1701,26 @@ export default function App() {
                     </div>
                   );
                 })
+              )}
+              {audioState !== "SLEEPING" && (
+                <div className="flex justify-end px-2">
+                  <div className="flex flex-col max-w-[85%] gap-1">
+                    <div className="flex items-center gap-1.5 text-[9px] text-slate-500 font-mono justify-end">
+                      <span>🎤 USER VOICE (ROCO ESCUCHANDO)</span>
+                      <span>•</span>
+                      <span>AHORA</span>
+                    </div>
+                    <div className="rounded-xl px-3 py-2 text-xs font-mono leading-relaxed select-text bg-gamer-neonGreen/5 border border-gamer-neonGreen/30 text-gamer-neonGreen rounded-tr-none shadow-[0_0_12px_rgba(57,255,20,0.08)] flex items-center gap-2">
+                      <span className="w-1.5 h-1.5 rounded-full bg-gamer-neonGreen animate-ping" />
+                      <span>Roco escuchando...</span>
+                      <div className="flex gap-0.5 items-end h-3">
+                        <span className="w-0.5 h-2 bg-gamer-neonGreen/80 rounded animate-[pulse_0.8s_infinite_100ms]" />
+                        <span className="w-0.5 h-3.5 bg-gamer-neonGreen rounded animate-[pulse_0.8s_infinite_300ms]" />
+                        <span className="w-0.5 h-1.5 bg-gamer-neonGreen/60 rounded animate-[pulse_0.8s_infinite_500ms]" />
+                      </div>
+                    </div>
+                  </div>
+                </div>
               )}
             </div>
 
