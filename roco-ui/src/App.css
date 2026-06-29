@@ -131,3 +131,18 @@ button {
   background: #ffea00; /* Gamer Neon Yellow */
 }
 
+@keyframes neonFlash {
+  0%, 100% {
+    border-color: #ffea00; /* Neon Yellow */
+    box-shadow: inset 0 0 15px rgba(255, 234, 0, 0.4), 0 0 15px rgba(255, 234, 0, 0.4);
+  }
+  50% {
+    border-color: #00eaff; /* Neon Blue */
+    box-shadow: inset 0 0 15px rgba(0, 234, 255, 0.4), 0 0 15px rgba(0, 234, 255, 0.4);
+  }
+}
+
+.animate-neon-flash {
+  animation: neonFlash 1.5s infinite ease-in-out;
+}
+

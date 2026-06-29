@@ -24,6 +24,7 @@ from .database import DatabaseManager
 from .hardware import HardwareScanner
 from .utils import AsyncLogger
 from .vision import VisionPipeline
+from .audio import FasterWhisperSTT, KokoroTTS, AudioFSM, AudioState
 
 
 class WebSocketServer:
@@ -81,6 +82,18 @@ class WebSocketServer:
         # Pipeline de visión
         self._vision_pipeline: Optional[VisionPipeline] = None
 
+        # Referencia al bucle de ejecución asíncrono
+        self.loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # Inicialización de motores de audio de la Fase 4
+        self._stt = FasterWhisperSTT(model_size="tiny")
+        self._tts = KokoroTTS()
+        self._audio_fsm = AudioFSM(
+            stt_engine=self._stt,
+            tts_engine=self._tts,
+            websocket_dispatcher=self.broadcast_audio_event
+        )
+
     def _get_client_address(self, websocket: ServerConnection) -> str:
         """Obtiene la dirección de red formateada del cliente.
 
@@ -111,6 +124,19 @@ class WebSocketServer:
             self._logger.warn(f"No se pudo enviar JSON. Conexión cerrada inesperadamente: {e}")
         except Exception as e:
             self._logger.error(f"Error inesperado al enviar JSON: {e}")
+
+    def broadcast_audio_event(self, event: str, payload: Dict[str, Any]) -> None:
+        """Transmite un evento estructurado de audio a todos los clientes WebSocket."""
+        if self.loop is not None:
+            for ws in list(self._connected_clients):
+                asyncio.run_coroutine_threadsafe(
+                    self._send_json(ws, {
+                        "event": event,
+                        "timestamp": datetime.now().isoformat(),
+                        "payload": payload
+                    }),
+                    self.loop
+                )
 
     async def _send_handshake(self, websocket: ServerConnection) -> None:
         """Despacha el mensaje de bienvenida y estado del sistema (SYSTEM_STATUS) al cliente.
@@ -367,6 +393,16 @@ class WebSocketServer:
                 }),
                 loop
             )
+
+            # Generación de voz local con Kokoro-82M (TTS)
+            text_to_speak = ocr_payload.get("text_raw")
+            if text_to_speak:
+                avatar_hash = ocr_payload.get("avatar_hash", "default")
+                voice_name = self._tts.avatar_voice_mapping.get(avatar_hash, "af_sarah")
+                asyncio.run_coroutine_threadsafe(
+                    self._tts.speak_async(text_to_speak, voice_name=voice_name),
+                    loop
+                )
 
         self._vision_pipeline = VisionPipeline(
             source_type=source_type,
@@ -792,11 +828,15 @@ class WebSocketServer:
             )
 
             def callback(indata: Any, frames: Any, time: Any, status: Any) -> None:
-                pass
+                if indata is not None:
+                    # Copiar canal mono float32 para inyectar en la FSM
+                    audio_chunk = indata[:, 0].copy()
+                    self._audio_fsm.feed_audio(audio_chunk)
 
             self._mic_stream = sd.InputStream(
                 device=device_idx,
                 channels=1,
+                dtype="float32",
                 callback=callback,
                 samplerate=16000
             )
@@ -824,6 +864,7 @@ class WebSocketServer:
             self._logger.warn("El servidor WebSocket ya se encuentra en ejecución.")
             return
 
+        self.loop = asyncio.get_running_loop()
         self._logger.info(f"Iniciando servidor WebSocket en ws://{self._config.host}:{self._config.port}...")
         try:
             # Inicializar estado de hardware (micrófono) en caliente desde SQLite

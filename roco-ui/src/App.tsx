@@ -52,6 +52,7 @@ export default function App() {
 
   // --- Estados de Configuración ---
   const [outputLang, setOutputLang] = useState<string>("es");
+  const [audioState, setAudioState] = useState<"SLEEPING" | "ACTIVE_ONE_SHOT" | "CONTINUOUS_CONVERSATION">("SLEEPING");
   const [volume, setVolume] = useState<number>(80);
   const [isMicActive, setIsMicActive] = useState<boolean>(false);
   const [isHudPassive, setIsHudPassive] = useState<boolean>(false);
@@ -568,11 +569,36 @@ export default function App() {
             id: `ocr_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
             sender: "roco",
             text: payload.text_raw,
-            timestamp: new Date().toLocaleTimeString(),
+            timestamp: new Date().toISOString(),
             type: "info"
           };
           setChatMessages((prev) => [...prev, ocrMsg]);
           emit("ocr-update", payload).catch(console.error);
+        }
+        break;
+      }
+
+      case "USER_STT_UPDATE": {
+        const payload = lastMsg.payload;
+        if (payload) {
+          const sttMsg: ChatMessage = {
+            id: `stt_${Date.now()}_${Math.random().toString(36).substr(2, 5)}`,
+            sender: "user",
+            text: payload.text,
+            timestamp: new Date().toISOString()
+          };
+          setChatMessages((prev) => [...prev, sttMsg]);
+        }
+        break;
+      }
+
+      case "AUDIO_STATE_CHANGED": {
+        const payload = lastMsg.payload;
+        if (payload && payload.state) {
+          const newState = payload.state as "SLEEPING" | "ACTIVE_ONE_SHOT" | "CONTINUOUS_CONVERSATION";
+          setAudioState(newState);
+          triggerToast(`Estado de audio cambiado a: ${newState}`);
+          invoke("set_tray_audio_state", { state: newState }).catch(console.error);
         }
         break;
       }
@@ -1023,6 +1049,12 @@ export default function App() {
   if (windowLabel === "overlay") {
     return (
       <div className="h-screen w-screen bg-transparent overflow-hidden relative select-none pointer-events-none font-sans">
+        {audioState === "CONTINUOUS_CONVERSATION" && (
+          <div className="absolute inset-0 border-4 border-double animate-neon-flash pointer-events-none z-50"></div>
+        )}
+        {audioState === "ACTIVE_ONE_SHOT" && (
+          <div className="absolute inset-0 border-4 border-solid border-gamer-neonGreen shadow-[inset_0_0_20px_rgba(57,255,20,0.3)] pointer-events-none z-50"></div>
+        )}
         {ocrData && ocrData.bbox && (
           <div
             className="absolute border-2 border-emerald-500 bg-emerald-500/5 shadow-[0_0_15px_rgba(16,185,129,0.4)] flex flex-col justify-end transition-all duration-200"
@@ -1047,6 +1079,12 @@ export default function App() {
 
   return (
     <div className="h-screen w-screen bg-slate-950 text-slate-100 overflow-hidden flex flex-col select-none relative font-sans">
+      {audioState === "CONTINUOUS_CONVERSATION" && (
+        <div className="absolute inset-0 border-4 border-double animate-neon-flash pointer-events-none z-50"></div>
+      )}
+      {audioState === "ACTIVE_ONE_SHOT" && (
+        <div className="absolute inset-0 border-4 border-solid border-gamer-neonGreen shadow-[inset_0_0_20px_rgba(57,255,20,0.3)] pointer-events-none z-50"></div>
+      )}
       {/* Notificación Flotante */}
       {toast && (
         <div className="absolute top-6 left-1/2 transform -translate-x-1/2 z-50 bg-gamer-panel border border-gamer-neonGreen text-gamer-neonGreen px-4 py-2.5 rounded-lg shadow-[0_0_20px_rgba(57,255,20,0.25)] flex items-center gap-3 animate-pulse">

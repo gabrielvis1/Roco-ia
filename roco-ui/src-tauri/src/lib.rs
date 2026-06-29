@@ -44,10 +44,25 @@ fn update_quick_profiles(app: tauri::AppHandle, profiles: Vec<String>) -> Result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
+#[tauri::command]
+fn set_tray_audio_state(app: tauri::AppHandle, state: String) -> Result<(), String> {
+    if let Some(tray) = app.tray_by_id("main") {
+        let display_state = match state.as_str() {
+            "SLEEPING" => "Pasivo (Escuchando Wake Word)",
+            "ACTIVE_ONE_SHOT" => "Escuchando Comando...",
+            "CONTINUOUS_CONVERSATION" => "Grabación Constante Activa 🎙️",
+            _ => &state
+        };
+        tray.set_tooltip(Some(format!("Roco IA - {}", display_state))).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![set_hud_mode, update_quick_profiles, set_hud_click_through])
+        .invoke_handler(tauri::generate_handler![set_hud_mode, update_quick_profiles, set_hud_click_through, set_tray_audio_state])
         .setup(|app| {
             // Inicializar menú contextual nativo base
             let show = MenuItem::with_id(app, "show", "Abrir Panel", true, None::<&str>)?;
